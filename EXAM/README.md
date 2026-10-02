@@ -1,18 +1,18 @@
-# SLCS Exam
+# SLCS Exam — Cloudflare Pages
 
-Exam Player độc lập cho `exam.skyfirst.io.vn`.
+Deployment target: Cloudflare Pages.
 
-## Cloudflare Workers Builds
+Cloudflare build configuration:
 - Root directory: `EXAM`
-- Build command: để trống (hoặc `npm run check` nếu giao diện bắt buộc)
-- Build output directory: để trống
-- Deploy command: `npx wrangler deploy`
+- Build command: leave empty
+- Build output directory: `public`
 
-Custom Domain `exam.skyfirst.io.vn` được gắn trong Cloudflare Dashboard; repo không tự khai báo route/domain.
+The `functions/health.js` Pages Function provides `/health`.
+The Exam Player calls the authoritative SLCS API at `https://slc.skyfirst.io.vn`.
+Do not add D1 migrations to this repository; SLCS remains the schema owner.
 
-Exam không sở hữu D1/migrations. Schema và dữ liệu authoritative do SLCS tại `slc.skyfirst.io.vn` quản lý. Exam Player dùng launch token ngắn hạn để đổi lấy access token giới hạn theo attempt.
-
-Kiểm tra nhanh sau deploy:
-- `/` => landing hoặc phiên thi
-- `/health` => JSON `{ok:true}`
-- static `/styles.css`, `/exam.js` => 200
+After deployment verify:
+1. `/` returns the Exam landing page.
+2. `/health` returns JSON with `ok: true`.
+3. `/styles.css`, `/api.js`, `/storage.js`, `/exam.js` return 200.
+4. Launch from SLCS using `?launch=...` and verify redeem, load, autosave, submit and recovery.

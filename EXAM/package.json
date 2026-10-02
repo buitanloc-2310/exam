@@ -1,13 +1,9 @@
 {
-  "name": "slcs-exam",
-  "version": "1.1.0",
+  "name": "slcs-exam-pages",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/index.js && node --check public/api.js && node --check public/storage.js && node --check public/exam.js",
-    "deploy": "npm run check && wrangler deploy"
-  },
-  "devDependencies": {
-    "wrangler": "4.145.0"
+    "check": "node --check public/api.js && node --check public/storage.js && node --check public/exam.js && node --check functions/health.js"
   }
 }
