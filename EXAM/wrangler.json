@@ -1,8 +1,12 @@
 {
-  "$schema":"node_modules/wrangler/config-schema.json",
-  "name":"slcs-exam",
-  "main":"src/index.js",
-  "compatibility_date":"2026-09-14",
-  "routes":[{"pattern":"exam.skyfirst.io.vn","custom_domain":true}],
-  "vars":{"SLC_API_ORIGIN":"https://slc.skyfirst.io.vn"}
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "slcs-exam",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-14",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  }
 }

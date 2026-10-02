@@ -1,5 +1,13 @@
 {
-  "name":"slcs-exam","version":"1.0.0","private":true,"type":"module",
-  "scripts":{"check":"node --check src/index.js","deploy":"npm run check && npx --yes wrangler@4.145.0 deploy"},
-  "devDependencies":{"wrangler":"4.145.0"}
+  "name": "slcs-exam",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js && node --check public/api.js && node --check public/storage.js && node --check public/exam.js",
+    "deploy": "npm run check && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.145.0"
+  }
 }
