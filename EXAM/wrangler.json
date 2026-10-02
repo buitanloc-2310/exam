@@ -1,0 +1,8 @@
+{
+  "$schema":"node_modules/wrangler/config-schema.json",
+  "name":"slcs-exam",
+  "main":"src/index.js",
+  "compatibility_date":"2026-09-14",
+  "routes":[{"pattern":"exam.skyfirst.io.vn","custom_domain":true}],
+  "vars":{"SLC_API_ORIGIN":"https://slc.skyfirst.io.vn"}
+}
