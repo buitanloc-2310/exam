@@ -19,6 +19,7 @@ export async function apiRequest(path, { token = '', ...options } = {}) {
     const error = new Error(payload.message || `Yêu cầu thất bại (${response.status}).`);
     error.status = response.status;
     error.detail = payload.detail;
+    error.code = payload?.detail?.code || payload?.code || '';
     throw error;
   }
   return payload;
