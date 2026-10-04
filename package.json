@@ -1,0 +1,9 @@
+{
+  "name": "slcs-exam-pages",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check public/api.js && node --check public/storage.js && node --check public/exam.js && node --check functions/health.js"
+  }
+}
