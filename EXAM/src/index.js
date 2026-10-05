@@ -4,7 +4,7 @@ const SECURITY = {
   'referrer-policy': 'strict-origin-when-cross-origin',
   'x-frame-options': 'DENY',
   'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://slc.skyfirst.io.vn; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-  'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+  'permissions-policy': 'camera=(), microphone=(), display-capture=(), geolocation=(), payment=(), usb=()',
   'strict-transport-security': 'max-age=31536000; includeSubDomains'
 };
 
@@ -17,7 +17,7 @@ async function health() {
   return Response.json({
     ok: dependency === 'available',
     service: 'Sky First Exam',
-    version: '2.0.0',
+    version: '3.0.0',
     status: dependency === 'available' ? 'available' : 'degraded',
     dependency: { slc: dependency },
     time: new Date().toISOString()

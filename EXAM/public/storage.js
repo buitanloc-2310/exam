@@ -1,8 +1,17 @@
-const ACCESS='slcs_exam_access',ATTEMPT='slcs_exam_attempt',MODE='slcs_exam_mode',INVITE='slcs_exam_invite';
-export const getSession=()=>({token:sessionStorage.getItem(ACCESS)||'',attempt:sessionStorage.getItem(ATTEMPT)||'',mode:sessionStorage.getItem(MODE)||'user',invite:sessionStorage.getItem(INVITE)||''});
-export const setSession=(token,attempt,mode='user',invite='')=>{sessionStorage.setItem(ACCESS,token);sessionStorage.setItem(ATTEMPT,attempt);sessionStorage.setItem(MODE,mode);if(invite)sessionStorage.setItem(INVITE,invite);else sessionStorage.removeItem(INVITE)};
-export const clearSession=()=>{[ACCESS,ATTEMPT,MODE,INVITE].forEach(k=>sessionStorage.removeItem(k))};
-const localKey=id=>`slcs_exam_${id}`;
-export function saveLocal(id,answers,events){if(id)localStorage.setItem(localKey(id),JSON.stringify({answers,events,at:Date.now()}))}
-export function loadLocal(id){try{return JSON.parse(localStorage.getItem(localKey(id))||'null')}catch{return null}}
-export function clearLocal(id){if(id)localStorage.removeItem(localKey(id))}
+const memory=new Map();let restricted=false;
+const read=(store,key)=>{try{return globalThis[store].getItem(key)}catch{restricted=true;return memory.get(`${store}:${key}`)||null}};
+const write=(store,key,value)=>{try{globalThis[store].setItem(key,value);return true}catch{restricted=true;memory.set(`${store}:${key}`,value);return false}};
+const remove=(store,key)=>{try{globalThis[store].removeItem(key)}catch{}memory.delete(`${store}:${key}`)};
+const keys=['slcs_exam_access','slcs_exam_attempt','slcs_exam_mode','slcs_exam_invite','slcs_exam_candidate'];
+export function getSession(){let candidate={};try{candidate=JSON.parse(read('sessionStorage',keys[4])||'{}')}catch{}if(!candidate||typeof candidate!=='object'||Array.isArray(candidate))candidate={};return {token:read('sessionStorage',keys[0])||'',attempt:read('sessionStorage',keys[1])||'',mode:read('sessionStorage',keys[2])||'user',invite:read('sessionStorage',keys[3])||'',candidate}}
+export function setSession(token,attempt,mode='user',invite='',candidate={}){[token,attempt,mode,invite,JSON.stringify(candidate)].forEach((v,i)=>write('sessionStorage',keys[i],String(v||'')))}
+export const clearSession=()=>keys.forEach(k=>remove('sessionStorage',k));
+export const storageRestricted=()=>restricted;
+export function saveLocal(id,answers,events,ui={},meta={}){if(!id)return false;return write('localStorage',`slcs_exam_${id}`,JSON.stringify({answers,events,ui,...meta,at:Date.now()}))}
+export function loadLocal(id){try{return JSON.parse(read('localStorage',`slcs_exam_${id}`)||'null')}catch{return null}}
+export const clearLocal=id=>remove('localStorage',`slcs_exam_${id}`);
+// Lease coordinates tabs in this browser; server revision checks remain authoritative.
+const owner=globalThis.crypto?.randomUUID?.()||Math.random().toString(36).slice(2);let owned='';
+export function acquireLease(id){const key=`slcs_exam_lock_${id}`;let lease=null;try{lease=JSON.parse(read('localStorage',key)||'null')}catch{}if(lease&&lease.owner!==owner&&lease.until>Date.now())return false;write('localStorage',key,JSON.stringify({owner,until:Date.now()+20000}));owned=id;return true}
+export function renewLease(){return !owned||acquireLease(owned)}
+export function releaseLease(){if(!owned)return;const key=`slcs_exam_lock_${owned}`;let lease=null;try{lease=JSON.parse(read('localStorage',key)||'null')}catch{}if(lease?.owner===owner)remove('localStorage',key);owned=''}

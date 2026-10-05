@@ -7,7 +7,7 @@ export async function onRequestGet() {
   return Response.json({
     ok: dependency === 'available',
     service: 'Sky First Exam',
-    version: '2.0.0',
+    version: '3.0.0',
     status: dependency === 'available' ? 'available' : 'degraded',
     dependency: { slc: dependency },
     time: new Date().toISOString()

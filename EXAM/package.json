@@ -1,9 +1,13 @@
 {
   "name": "slcs-exam-pages",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check public/api.js && node --check public/storage.js && node --check public/exam.js && node --check functions/health.js"
+    "check": "node --check public/api.js && node --check public/storage.js && node --check public/core.js && node --check public/exam.js && node --check src/index.js && node --check functions/health.js",
+    "test": "node scripts/validate.mjs",
+    "build": "npm run check && npm test",
+    "dev": "npx --yes wrangler@4.34.0 dev",
+    "deploy": "npm run build && npx --yes wrangler@4.34.0 deploy"
   }
 }
