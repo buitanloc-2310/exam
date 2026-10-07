@@ -1,7 +1,8 @@
-export const API_ORIGIN='https://slc.skyfirst.io.vn';
-export async function apiRequest(path,{token='',timeout=18000,...options}={}){
+export const API_ORIGIN='';
+export async function apiRequest(path,{token='',sessionId='',timeout=18000,...options}={}){
  if(!/^\/api\//.test(path))throw new Error('Đường dẫn yêu cầu không hợp lệ.');
- const headers=new Headers(options.headers||{});if(token)headers.set('authorization',`Bearer ${token}`);if(options.body&&!headers.has('content-type'))headers.set('content-type','application/json');
+ const headers=new Headers(options.headers||{});if(token)headers.set('authorization',`Bearer ${token}`);if(sessionId)headers.set('x-exam-session',sessionId);
+ if(options.body&&!(options.body instanceof FormData)&&!headers.has('content-type'))headers.set('content-type','application/json');
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);let response,payload;
  try{response=await fetch(API_ORIGIN+path,{...options,headers,signal:controller.signal,credentials:'omit',cache:'no-store'});try{payload=await response.json()}catch(cause){if(cause.name==='AbortError')throw cause;payload=null}
  if(!payload||typeof payload!=='object'||Array.isArray(payload)){const error=new Error('Máy chủ trả phản hồi không hợp lệ. Vui lòng thử lại.');error.status=response.status;throw error}

@@ -2,11 +2,24 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "slcs-exam",
   "main": "src/index.js",
-  "compatibility_date": "2026-09-14",
+  "compatibility_date": "2026-10-07",
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": true
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "skyfirsthoctap",
+      "database_id": "6fd6a6c3-aae6-4b11-89e0-8e13a0e27d3c"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "skyfirsthoctap"
+    }
+  ]
 }

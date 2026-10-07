@@ -12,6 +12,7 @@ export function answerStatus(q,answers={}){
  if(q.type==='matching'){const left=optionsFor(q).map(x=>x.split('|||')[0]);const n=left.filter(k=>present(a?.[k])).length;return n===0?'empty':n===left.length?'done':'partial'}
  if(q.type==='ordering'){const aList=Array.isArray(a)?a:[];const n=aList.filter(present).length;return n===0?'empty':n===optionsFor(q).length&&new Set(aList).size===aList.length?'done':'partial'}
  if(q.type==='multi')return Array.isArray(a)&&a.some(present)?'done':'empty';
+ if(['file','image','audio'].includes(q.type))return a&&typeof a==='object'&&present(a.file_id)?'done':'empty';
  return present(a)?'done':'empty';
 }
 export function normalizeExam(raw){
