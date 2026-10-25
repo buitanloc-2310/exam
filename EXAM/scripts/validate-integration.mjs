@@ -94,6 +94,7 @@ const baseEnv = {
   }
 };
 
+function crossSiteResReq(r) { return r; }
 function getEnv() {
   if (emailServiceMode === 'unconfigured') {
     const { EMAIL_DISPATCHER, ...rest } = baseEnv;
@@ -513,6 +514,15 @@ try {
     assert.equal(graded.data.pending_manual, 0);
     assert.equal(graded.data.workflow_state, 'graded');
 
+    // Approver cannot publish before approving when manual grading is present (409 APPROVAL_REQUIRED_BEFORE_PUBLISH)
+    const pubBeforeApprove = await call(`/api/admin/grading/${guestAttemptId}/workflow`, {
+      method: 'POST',
+      token: approverToken,
+      body: { action: 'publish', reason: 'Skip approve step' }
+    });
+    assert.equal(pubBeforeApprove.status, 409);
+    assert.equal(pubBeforeApprove.data.detail?.code, 'APPROVAL_REQUIRED_BEFORE_PUBLISH');
+
     // Approver approves and publishes the result
     const approved = await call(`/api/admin/grading/${guestAttemptId}/workflow`, {
       method: 'POST',
@@ -642,6 +652,191 @@ try {
     assert.ok(logs.data.logs.length >= 10);
     const rawLogs = JSON.stringify(logs.data.logs);
     assert.doesNotMatch(rawLogs, /test-bootstrap-secret-2026/, 'Bootstrap secret must never appear in audit logs');
+  });
+
+  // Scenario 12: One-time Bootstrap Lock, Cookie CSRF Origin/Referer Defense, Schedule Validation, Question Bank Delete, & Support Resolution
+  await scenario('One-time bootstrap lock, Cookie CSRF Origin defense, schedule validation, question delete, and support resolution', async () => {
+    // Re-calling bootstrap when system_admin is already active is locked (409 BOOTSTRAP_ALREADY_COMPLETED)
+    const secondBoot = await call('/api/admin/auth/bootstrap', {
+      method: 'POST',
+      body: { bootstrap_token: 'test-bootstrap-secret-2026', email: 'another@skyfirst.io.vn', full_name: 'Second Admin' }
+    });
+    assert.equal(secondBoot.status, 409);
+    assert.equal(secondBoot.data.detail?.code, 'BOOTSTRAP_ALREADY_COMPLETED');
+
+    // Cookie-authenticated mutating request with cross-site Origin header is blocked (403 CSRF_ORIGIN_MISMATCH)
+    const crossSiteReq = new Request('https://exam.skyfirst.io.vn/api/admin/questions', {
+      method: 'POST',
+      headers: {
+        'cookie': `exam_admin_session=${sysAdminToken}`,
+        'x-csrf-token': sysAdminCsrf,
+        'origin': 'https://evil.example.com',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ id: 'csrf-q', question: 'Test', type: 'mcq', options: ['A', 'B'], answer: 'A' })
+    });
+    const crossSiteRes = await examWorker.fetch(crossSiteResReq(crossSiteReq), getEnv());
+    const crossSiteData = await crossSiteRes.json();
+    assert.equal(crossSiteRes.status, 403);
+    assert.equal(crossSiteData.detail?.code, 'CSRF_ORIGIN_MISMATCH');
+
+    // Contradictory schedule window (closes_at <= opens_at) is rejected (400 INVALID_SCHEDULE_WINDOW)
+    const badSched = await call('/api/admin/exams', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: {
+        id: 'exam-bad-sched',
+        title: 'Bad Schedule Exam',
+        opens_at: '2026-12-10T10:00:00+07:00',
+        closes_at: '2026-12-01T10:00:00+07:00',
+        questions: [{ id: 'q1', type: 'mcq', question: 'Q?', options: ['A', 'B'], answer: 'A' }]
+      }
+    });
+    assert.equal(badSched.status, 400);
+    assert.equal(badSched.data.detail?.code, 'INVALID_SCHEDULE_WINDOW');
+
+    // Delete / archive question bank item
+    const delQ = await call('/api/admin/questions/q-mcq-1', {
+      method: 'DELETE',
+      token: sysAdminToken
+    });
+    assert.equal(delQ.status, 200);
+    assert.equal(delQ.data.status, 'deleted');
+
+    // Candidate submits support request -> Admin resolves it
+    const sup = await call('/api/public/support', {
+      method: 'POST',
+      body: { full_name: 'Nguyễn Văn An', candidate_code: 'SFN-001', email: 'cand1@example.com', exam_id: examId, message: 'Cần hỗ trợ kiểm tra biên nhận.' }
+    });
+    assert.equal(sup.status, 200);
+    const resolveSup = await call(`/api/admin/support/${sup.data.support_id}/resolve`, {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { resolution_note: 'Đã xác nhận mã biên nhận hợp lệ trên hệ thống.' }
+    });
+    assert.equal(resolveSup.status, 200);
+    assert.equal(resolveSup.data.status, 'resolved');
+  });
+
+  // Scenario 13: Segregation of Duties (Grader who also holds result_approver cannot self-approve their own grading)
+  await scenario('Segregation of duties prevents a grader from approving their own manual grading (403 SEGREGATION_OF_DUTIES_VIOLATION)', async () => {
+    // Grant grader user both grader and result_approver roles
+    await call('/api/admin/users/role', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { email: 'grader@skyfirst.io.vn', full_name: 'Dual Grader', status: 'active', roles: ['grader', 'result_approver'], reason: 'Test SoD' }
+    });
+    // Revoke publication on guestAttemptId first so it is back in revoked/editable state, then re-grade by graderToken
+    await call(`/api/admin/grading/${guestAttemptId}/workflow`, {
+      method: 'POST',
+      token: approverToken,
+      body: { action: 'revoke', reason: 'Mở khóa tạm thời để kiểm tra phân tách nhiệm vụ' }
+    });
+    const regrade = await call(`/api/admin/grading/${guestAttemptId}/grade`, {
+      method: 'POST',
+      token: graderToken,
+      body: { question_id: 'q2', score: 5.5, feedback: 'Chấm lại', reason: 'Test SoD' }
+    });
+    assert.equal(regrade.status, 200);
+
+    // Now graderToken (who graded q2) attempts to approve guestAttemptId -> blocked by Segregation of Duties!
+    const selfApprove = await call(`/api/admin/grading/${guestAttemptId}/workflow`, {
+      method: 'POST',
+      token: graderToken,
+      body: { action: 'approve', reason: 'Tự duyệt bài mình chấm' }
+    });
+    assert.equal(selfApprove.status, 403);
+    assert.equal(selfApprove.data.detail?.code, 'SEGREGATION_OF_DUTIES_VIOLATION');
+
+    // Independent approverToken (who did not grade q2) approves and re-publishes cleanly
+    const indepApprove = await call(`/api/admin/grading/${guestAttemptId}/workflow`, {
+      method: 'POST',
+      token: approverToken,
+      body: { action: 'approve', reason: 'Người duyệt độc lập phê duyệt' }
+    });
+    assert.equal(indepApprove.status, 200);
+    const indepPublish = await call(`/api/admin/grading/${guestAttemptId}/workflow`, {
+      method: 'POST',
+      token: approverToken,
+      body: { action: 'publish', reason: 'Công bố lại sau phê duyệt độc lập' }
+    });
+    assert.equal(indepPublish.status, 200);
+  });
+
+  // Scenario 14: Legacy 16-Table Schema Upgrade Verification (Section VI)
+  await scenario('Legacy 16-table database upgrades cleanly via 0002 migration + ensureAdditiveSchema without losing existing data', async () => {
+    const legacyDb = new DatabaseSync(':memory:');
+    try {
+      // 1. Create ONLY the original 16 tables from exam-main-audited.zip
+      legacyDb.exec(`
+        CREATE TABLE exams(id TEXT PRIMARY KEY,title TEXT,instructions TEXT,duration_minutes INTEGER,time_limit_enabled INTEGER,strict_mode INTEGER,fullscreen_required INTEGER,show_score INTEGER,assessment_type TEXT,assessment_label TEXT,center_label TEXT,result_policy TEXT,result_release_at TEXT,closes_at TEXT,status TEXT,security_profile TEXT,allow_clipboard INTEGER,allow_paste INTEGER,allow_external_links INTEGER,device_policy TEXT,resume_policy TEXT,calculator_policy TEXT,question_json TEXT,class_id TEXT,sealed_version_id TEXT);
+        CREATE TABLE users(id TEXT PRIMARY KEY,full_name TEXT,sfn_id TEXT,email TEXT,status TEXT);
+        CREATE TABLE classes(id TEXT PRIMARY KEY,name TEXT);
+        CREATE TABLE assessment_exam_versions(id TEXT PRIMARY KEY,snapshot_json TEXT);
+        CREATE TABLE exam_attempts(id TEXT PRIMARY KEY,exam_id TEXT,user_id TEXT,status TEXT,started_at TEXT,duration_minutes INTEGER,time_limit_enabled INTEGER,extra_time_minutes INTEGER DEFAULT 0,answers_json TEXT,event_log_json TEXT,score REAL,max_score REAL,submitted_at TEXT,last_saved_at TEXT,answer_revision INTEGER DEFAULT 0,question_snapshot_json TEXT,exam_version_id TEXT);
+        CREATE TABLE exam_guest_attempts(id TEXT PRIMARY KEY,exam_id TEXT,status TEXT,started_at TEXT,duration_minutes INTEGER,time_limit_enabled INTEGER,extra_time_minutes INTEGER DEFAULT 0,answers_json TEXT,event_log_json TEXT,score REAL,max_score REAL,submitted_at TEXT,last_saved_at TEXT,answer_revision INTEGER DEFAULT 0,question_snapshot_json TEXT,exam_version_id TEXT,access_key TEXT,full_name TEXT,candidate_code TEXT,class_name TEXT);
+        CREATE TABLE exam_access_tokens(token_hash TEXT PRIMARY KEY,user_id TEXT,attempt_id TEXT,expires_at TEXT,created_at TEXT);
+        CREATE TABLE exam_launch_tokens(token_hash TEXT PRIMARY KEY,user_id TEXT,attempt_id TEXT,expires_at TEXT,used_at TEXT);
+        CREATE TABLE assessment_attempt_leases(attempt_id TEXT,source TEXT,session_id TEXT,claimed_at TEXT,last_seen_at TEXT,PRIMARY KEY(attempt_id,source));
+        CREATE TABLE assessment_answer_revisions(id TEXT PRIMARY KEY,attempt_id TEXT,source TEXT,revision INTEGER,answers_json TEXT,events_json TEXT,accepted_at TEXT,UNIQUE(attempt_id,revision));
+        CREATE TABLE assessment_response_files(id TEXT PRIMARY KEY,attempt_id TEXT,source TEXT,question_id TEXT,file_id TEXT,status TEXT,created_at TEXT);
+        CREATE TABLE files(id TEXT PRIMARY KEY,owner_user_id TEXT,r2_key TEXT,name TEXT,mime TEXT,size INTEGER,visibility TEXT,created_at TEXT);
+        CREATE TABLE assessment_manual_grades(id TEXT PRIMARY KEY,attempt_id TEXT,question_id TEXT,grader_user_id TEXT,score REAL,feedback TEXT,status TEXT,created_at TEXT,updated_at TEXT,UNIQUE(attempt_id,question_id));
+        CREATE TABLE assessment_receipts(id TEXT PRIMARY KEY,attempt_id TEXT,receipt_code TEXT,payload_json TEXT,created_at TEXT,UNIQUE(attempt_id));
+        CREATE TABLE assessment_result_workflows(attempt_id TEXT PRIMARY KEY,source TEXT,state TEXT,updated_at TEXT);
+        CREATE TABLE exam_audit_log(id TEXT PRIMARY KEY,exam_id TEXT,attempt_id TEXT,actor_user_id TEXT,event_type TEXT,detail_json TEXT);
+      `);
+      // Insert pre-existing production-like records
+      legacyDb.prepare(`INSERT INTO exams VALUES('legacy-exam-1','Legacy Exam','Rules',60,1,0,0,1,'assessment','Assessment','Sky First','score_after_submit',NULL,NULL,'published','STANDARD',1,1,0,'single_session','same_session','disabled','[{"id":"q1","type":"mcq","question":"1+1?","options":["1","2"],"answer":"2","points":1}]',NULL,NULL)`).run();
+      legacyDb.prepare(`INSERT INTO users VALUES('legacy-u1','Legacy Student','SFN-LEG-01','legacy@skyfirst.io.vn','active')`).run();
+
+      // 2. Apply 0002 upgrade migration
+      legacyDb.exec(fs.readFileSync('migrations/0002_exam_upgrade_existing_schema.sql', 'utf8'));
+
+      class LegStmt {
+        constructor(sql, params = []) { this.sql = sql; this.params = params; }
+        bind(...params) { return new LegStmt(this.sql, params); }
+        async first() { return legacyDb.prepare(this.sql).get(...this.params) || null; }
+        async all() { return { results: legacyDb.prepare(this.sql).all(...this.params) }; }
+        async run() { const x = legacyDb.prepare(this.sql).run(...this.params); return { success: true, meta: { changes: Number(x.changes) } }; }
+      }
+      const legEnv = {
+        ...baseEnv,
+        DB: {
+          prepare: sql => new LegStmt(sql),
+          batch: async stmts => {
+            legacyDb.exec('BEGIN');
+            try { const r = []; for (const s of stmts) r.push(await s.run()); legacyDb.exec('COMMIT'); return r; }
+            catch (e) { legacyDb.exec('ROLLBACK'); throw e; }
+          }
+        }
+      };
+
+      // 3. Verify health, bootstrap, and public catalog on upgraded legacy DB
+      const hRes = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/health'), legEnv);
+      const hData = await hRes.json();
+      assert.equal(hRes.status, 200);
+      assert.equal(hData.status, 'available');
+
+      const catRes = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/api/public/catalog'), legEnv);
+      const catData = await catRes.json();
+      assert.equal(catRes.status, 200);
+
+      const bootRes = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/api/admin/auth/bootstrap', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ bootstrap_token: 'test-bootstrap-secret-2026', email: 'legacy.admin@skyfirst.io.vn', full_name: 'Legacy Admin' })
+      }), legEnv);
+      assert.equal(bootRes.status, 200);
+
+      // Confirm pre-existing exam & user remain intact
+      const countExams = legacyDb.prepare(`SELECT COUNT(*) n FROM exams WHERE id='legacy-exam-1'`).get().n;
+      const countUsers = legacyDb.prepare(`SELECT COUNT(*) n FROM users WHERE id='legacy-u1'`).get().n;
+      assert.equal(countExams, 1);
+      assert.equal(countUsers, 1);
+    } finally {
+      legacyDb.close();
+    }
   });
 
   console.log(`STANDALONE EXAM 2026 INTEGRATION SUITE: ${passed}/${passed} PASS`);

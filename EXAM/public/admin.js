@@ -16,6 +16,8 @@ let adminState = {
   dashboard: null,
   exams: [],
   selectedExam: null,
+  selectedQuestion: null,
+  qSearch: '',
   questions: [],
   candidates: { enrollments: [], users: [] },
   monitor: { attempts: [], support_requests: [], disclaimer: '' },
@@ -540,12 +542,22 @@ function renderExamsTab() {
 }
 
 function renderQuestionsTab() {
+  const sq = adminState.selectedQuestion;
+  const filteredQs = (adminState.questions || []).filter(q => {
+    if (!adminState.qSearch) return true;
+    const term = adminState.qSearch.toLowerCase();
+    return String(q.question || '').toLowerCase().includes(term) || String(q.topic || '').toLowerCase().includes(term) || String(q.id || '').toLowerCase().includes(term);
+  });
   return `
     <section class="admin-section">
       <div class="section-head">
         <div>
           <div class="ey">NGÂN HÀNG CÂU HỎI & PHIÊN BẢN HÓA</div>
-          <h2>Ngân hàng câu hỏi (${adminState.questions.length})</h2>
+          <h2>Ngân hàng câu hỏi (${filteredQs.length} / ${adminState.questions.length})</h2>
+        </div>
+        <div class="row-actions">
+          <input id="qbankSearchInput" placeholder="Tìm theo chủ đề / nội dung…" value="${esc(adminState.qSearch)}" style="min-height:36px;padding:6px 10px;border:1px solid #cbd5e3;border-radius:6px">
+          <button type="button" class="btn btn-sm" id="btnExportQbank">Xuất JSON</button>
         </div>
       </div>
       <div class="table-wrap">
@@ -557,11 +569,12 @@ function renderQuestionsTab() {
               <th>Loại câu</th>
               <th>Nội dung câu hỏi</th>
               <th>Điểm</th>
-              <th>Đáp án chuẩn (Bảo mật)</th>
+              <th>Đáp án chuẩn</th>
+              <th>Thao tác</th>
             </tr>
           </thead>
           <tbody>
-            ${adminState.questions.length ? adminState.questions.map(q => `
+            ${filteredQs.length ? filteredQs.map(q => `
               <tr>
                 <td><b>${esc(q.code || q.id)}</b><br><small>v${esc(q.version || 1)}</small></td>
                 <td>${esc(q.topic || 'Chung')}<br><small>Độ khó: ${esc(q.difficulty || 'medium')}</small></td>
@@ -569,16 +582,23 @@ function renderQuestionsTab() {
                 <td>${esc(q.question)}</td>
                 <td><b>${esc(q.points)}</b></td>
                 <td><code>${esc(typeof q.answer === 'object' ? JSON.stringify(q.answer) : (q.answer ?? 'Chấm thủ công'))}</code></td>
+                <td>
+                  <div class="row-actions">
+                    <button type="button" class="btn btn-sm" data-edit-question="${esc(q.id)}">Sửa</button>
+                    <button type="button" class="btn btn-sm" data-delete-question="${esc(q.id)}">Lưu trữ/Xóa</button>
+                  </div>
+                </td>
               </tr>
-            `).join('') : `<tr><td colspan="6">Ngân hàng câu hỏi hiện đang trống.</td></tr>`}
+            `).join('') : `<tr><td colspan="7">Ngân hàng câu hỏi hiện đang trống hoặc không có kết quả khớp.</td></tr>`}
           </tbody>
         </table>
       </div>
     </section>
 
-    <section class="admin-section">
-      <h2>Thêm câu hỏi mới vào Ngân hàng đề</h2>
+    <section class="admin-section" id="qbankEditorSection">
+      <h2>${sq ? `Chỉnh sửa câu hỏi: ${esc(sq.id)} (v${esc(sq.version || 1)})` : 'Thêm câu hỏi mới vào Ngân hàng đề'}</h2>
       <form id="qbankForm">
+        <input type="hidden" name="is_update" value="${sq ? '1' : ''}">
         <div class="two">
           <div class="field">
             <label>Mã câu hỏi</label>
@@ -814,7 +834,16 @@ function renderMonitorTab() {
                 <td>${esc(sr.exam_id || '—')}<br><small>${esc(sr.attempt_id || '')}</small></td>
                 <td>${esc(sr.issue_type)}</td>
                 <td>${esc(sr.message)}</td>
-                <td><span class="status-badge status-${esc(sr.status)}">${esc(sr.status)}</span></td>
+                <td>
+                  <span class="status-badge status-${esc(sr.status)}">${esc(sr.status)}</span>
+                  ${sr.resolution_note ? `<br><small>Xử lý: ${esc(sr.resolution_note)}</small>` : ''}
+                  ${sr.status === 'open' ? `
+                    <form class="support-resolve-form" data-support-id="${esc(sr.id)}" style="margin-top:6px;display:flex;gap:6px">
+                      <input name="resolution_note" required placeholder="Ghi chú xử lý…" style="min-height:32px;padding:4px 8px;font-size:12px">
+                      <button type="submit" class="btn btn-sm primary">Đóng sự cố</button>
+                    </form>
+                  ` : ''}
+                </td>
               </tr>
             `).join('') : `<tr><td colspan="6">Không có yêu cầu hỗ trợ nào đang chờ.</td></tr>`}
           </tbody>
@@ -1207,12 +1236,86 @@ function bindAdminEvents(appEl) {
     }
   });
 
+  appEl.querySelector('#qbankSearchInput')?.addEventListener('input', ev => {
+    adminState.qSearch = ev.currentTarget.value;
+    renderAdminShell(appEl);
+    const input = appEl.querySelector('#qbankSearchInput');
+    if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+  });
+
+  appEl.querySelector('#btnExportQbank')?.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify({ questions: adminState.questions || [] }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `SkyFirst-EXAM-QuestionBank-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  appEl.querySelectorAll('[data-edit-question]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const q = (adminState.questions || []).find(x => String(x.id) === btn.dataset.editQuestion);
+      if (!q) return;
+      adminState.selectedQuestion = q;
+      renderAdminShell(appEl);
+      const form = appEl.querySelector('#qbankForm');
+      if (form) {
+        form.elements.id.value = q.id;
+        form.elements.topic.value = q.topic || 'Chung';
+        form.elements.difficulty.value = q.difficulty || 'medium';
+        form.elements.type.value = q.type || 'mcq';
+        form.elements.points.value = q.points ?? 1;
+        form.elements.answer.value = typeof q.answer === 'object' ? JSON.stringify(q.answer) : (q.answer ?? '');
+        form.elements.question.value = q.question || '';
+        form.elements.options_lines.value = Array.isArray(q.options) ? q.options.join('\n') : '';
+        form.elements.explanation.value = q.explanation || '';
+      }
+      document.querySelector('#qbankEditorSection')?.scrollIntoView({ behavior: 'smooth' });
+    });
+  });
+
+  appEl.querySelectorAll('[data-delete-question]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const qId = btn.dataset.deleteQuestion;
+      try {
+        await adminReq(`/api/admin/questions/${encodeURIComponent(qId)}`, { method: 'DELETE' });
+        showAdminToast(`Đã lưu trữ/xóa câu hỏi ${qId}.`);
+        await loadTabData('questions');
+        renderAdminShell(appEl);
+      } catch (err) {
+        showAdminToast(err.message, true);
+      }
+    });
+  });
+
+  appEl.querySelectorAll('.support-resolve-form').forEach(form => {
+    form.addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const supportId = form.dataset.supportId;
+      const fd = new FormData(form);
+      try {
+        await adminReq(`/api/admin/support/${encodeURIComponent(supportId)}/resolve`, {
+          method: 'POST',
+          body: JSON.stringify({ resolution_note: String(fd.get('resolution_note') || '') })
+        });
+        showAdminToast('Đã đóng yêu cầu hỗ trợ kỹ thuật.');
+        await loadTabData('monitor');
+        renderAdminShell(appEl);
+      } catch (err) {
+        showAdminToast(err.message, true);
+      }
+    });
+  });
+
   appEl.querySelector('#qbankForm')?.addEventListener('submit', async ev => {
     ev.preventDefault();
     const fd = new FormData(ev.currentTarget);
+    const isUpdate = fd.get('is_update') === '1';
+    const qId = String(fd.get('id') || '').trim();
     const options = String(fd.get('options_lines') || '').split('\n').map(s => s.trim()).filter(Boolean);
     const payload = {
-      id: String(fd.get('id') || '').trim(),
+      id: qId,
       topic: String(fd.get('topic') || 'Chung').trim(),
       difficulty: String(fd.get('difficulty') || 'medium'),
       type: String(fd.get('type') || 'mcq'),
@@ -1223,8 +1326,12 @@ function bindAdminEvents(appEl) {
       explanation: String(fd.get('explanation') || '').trim()
     };
     try {
-      await adminReq('/api/admin/questions', { method: 'POST', body: JSON.stringify(payload) });
-      showAdminToast('Đã lưu câu hỏi vào ngân hàng đề.');
+      await adminReq(isUpdate ? `/api/admin/questions/${encodeURIComponent(qId)}` : '/api/admin/questions', {
+        method: isUpdate ? 'PUT' : 'POST',
+        body: JSON.stringify(payload)
+      });
+      adminState.selectedQuestion = null;
+      showAdminToast(isUpdate ? 'Đã cập nhật phiên bản câu hỏi.' : 'Đã lưu câu hỏi vào ngân hàng đề.');
       await loadTabData('questions');
       renderAdminShell(appEl);
     } catch (err) {

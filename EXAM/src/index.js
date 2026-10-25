@@ -41,17 +41,17 @@ export const ADMIN_ROLES = [
   'account_admin'
 ];
 
-const ROLE_PERMISSIONS = {
+export const ROLE_PERMISSIONS = {
   system_admin: new Set(['*']),
   account_admin: new Set(['dashboard:view', 'users:read', 'users:write', 'audit:read']),
-  exam_admin: new Set(['dashboard:view', 'exams:read', 'exams:write', 'exams:lifecycle', 'questions:read', 'questions:write', 'candidates:read', 'candidates:write', 'monitor:read', 'monitor:write', 'grading:read', 'results:read', 'audit:read']),
-  question_bank_manager: new Set(['dashboard:view', 'questions:read', 'questions:write', 'exams:read']),
+  exam_admin: new Set(['dashboard:view', 'exams:read', 'exams:write', 'exams:lifecycle', 'questions:read', 'questions:write', 'questions:delete', 'candidates:read', 'candidates:write', 'monitor:read', 'monitor:write', 'support:read', 'support:write', 'grading:read', 'results:read', 'audit:read']),
+  question_bank_manager: new Set(['dashboard:view', 'questions:read', 'questions:write', 'questions:delete', 'exams:read']),
   exam_author: new Set(['dashboard:view', 'questions:read', 'questions:write', 'exams:read', 'exams:write']),
-  proctor: new Set(['dashboard:view', 'monitor:read', 'monitor:write', 'candidates:read', 'exams:read']),
+  proctor: new Set(['dashboard:view', 'monitor:read', 'monitor:write', 'support:read', 'support:write', 'candidates:read', 'exams:read']),
   grader: new Set(['dashboard:view', 'grading:read', 'grading:write', 'exams:read']),
   result_approver: new Set(['dashboard:view', 'grading:read', 'results:read', 'results:approve', 'results:publish', 'results:revoke', 'exams:read', 'audit:read']),
   appeal_officer: new Set(['dashboard:view', 'appeals:read', 'appeals:write', 'grading:read', 'results:read', 'audit:read']),
-  report_viewer: new Set(['dashboard:view', 'exams:read', 'results:read', 'candidates:read', 'monitor:read', 'audit:read'])
+  report_viewer: new Set(['dashboard:view', 'exams:read', 'questions:read', 'results:read', 'candidates:read', 'monitor:read', 'appeals:read', 'support:read', 'audit:read'])
 };
 
 const VALID_EXAM_TRANSITIONS = {
@@ -74,6 +74,17 @@ const bad = (message, status = 400, detail) => json({ ok: false, message, detail
 
 function httpError(message, status = 400, detail) {
   return Object.assign(new Error(message), { status, detail });
+}
+
+function timingSafeStringEqual(a, b) {
+  const s1 = String(a ?? ''), s2 = String(b ?? '');
+  const e1 = new TextEncoder().encode(s1), e2 = new TextEncoder().encode(s2);
+  const len = Math.max(e1.length, e2.length);
+  let diff = e1.length ^ e2.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (e1[i] || 0) ^ (e2[i] || 0);
+  }
+  return diff === 0 && e1.length > 0;
 }
 
 async function readJsonBody(request, maxBytes = MAX_JSON_BODY_BYTES) {
@@ -419,9 +430,9 @@ function applySealedPackage(row) {
 // =============================================================================
 // STANDALONE SCHEMA AUTO-INITIALIZER (Idempotent for Additive Tables)
 // =============================================================================
-let schemaEnsured = false;
+const ensuredDbs = new WeakSet();
 async function ensureAdditiveSchema(env) {
-  if (schemaEnsured || !env?.DB) return;
+  if (!env?.DB || ensuredDbs.has(env.DB)) return;
   try {
     const ddl = [
       `CREATE TABLE IF NOT EXISTS exam_otp_challenges(id TEXT PRIMARY KEY,email TEXT NOT NULL,purpose TEXT NOT NULL,scope_id TEXT DEFAULT '',otp_hash TEXT NOT NULL,attempts INTEGER DEFAULT 0,max_attempts INTEGER DEFAULT 5,expires_at TEXT NOT NULL,used_at TEXT,verified_token_hash TEXT,verified_expires_at TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP)`,
@@ -449,12 +460,27 @@ async function ensureAdditiveSchema(env) {
       `ALTER TABLE exams ADD COLUMN violation_threshold INTEGER DEFAULT 0`,
       `ALTER TABLE exams ADD COLUMN randomize_questions INTEGER DEFAULT 0`,
       `ALTER TABLE exams ADD COLUMN randomize_options INTEGER DEFAULT 0`,
-      `ALTER TABLE exam_guest_attempts ADD COLUMN email TEXT`
+      `ALTER TABLE exam_attempts ADD COLUMN lock_reason TEXT`,
+      `ALTER TABLE exam_attempts ADD COLUMN locked_at TEXT`,
+      `ALTER TABLE exam_attempts ADD COLUMN unlocked_by TEXT`,
+      `ALTER TABLE exam_attempts ADD COLUMN unlocked_at TEXT`,
+      `ALTER TABLE exam_guest_attempts ADD COLUMN email TEXT`,
+      `ALTER TABLE exam_guest_attempts ADD COLUMN lock_reason TEXT`,
+      `ALTER TABLE exam_guest_attempts ADD COLUMN locked_at TEXT`,
+      `ALTER TABLE exam_guest_attempts ADD COLUMN unlocked_by TEXT`,
+      `ALTER TABLE exam_guest_attempts ADD COLUMN unlocked_at TEXT`,
+      `ALTER TABLE assessment_result_workflows ADD COLUMN approved_by TEXT`,
+      `ALTER TABLE assessment_result_workflows ADD COLUMN approved_at TEXT`,
+      `ALTER TABLE assessment_result_workflows ADD COLUMN published_by TEXT`,
+      `ALTER TABLE assessment_result_workflows ADD COLUMN published_at TEXT`,
+      `ALTER TABLE assessment_result_workflows ADD COLUMN revoked_by TEXT`,
+      `ALTER TABLE assessment_result_workflows ADD COLUMN revoked_at TEXT`,
+      `ALTER TABLE assessment_result_workflows ADD COLUMN revoke_reason TEXT`
     ];
     for (const sql of alters) {
       await env.DB.prepare(sql).run().catch(() => {});
     }
-    schemaEnsured = true;
+    ensuredDbs.add(env.DB);
   } catch {
     // Allow partial mock DBs in unit tests
   }
@@ -976,7 +1002,7 @@ async function listPublicCatalog(env) {
   await ensureAdditiveSchema(env);
   try {
     const res = await env.DB.prepare(
-      `SELECT id, title, instructions, duration_minutes, time_limit_enabled, strict_mode, fullscreen_required, assessment_type, assessment_label, center_label, opens_at, closes_at, status, public_token, public_access, require_email_verify FROM exams WHERE status='published' AND COALESCE(public_access, 0)=1 ORDER BY created_at DESC LIMIT 50`
+      `SELECT id, title, instructions, duration_minutes, time_limit_enabled, strict_mode, fullscreen_required, assessment_type, assessment_label, center_label, opens_at, closes_at, status, public_token, public_access, require_email_verify FROM exams WHERE status='published' AND COALESCE(public_access, 0)=1 ORDER BY rowid DESC LIMIT 50`
     ).all();
     const exams = (res?.results || []).map(e => ({
       id: e.id,
@@ -1393,11 +1419,20 @@ async function authorizeAdmin(env, request, requiredPermission = null) {
     throw httpError('Phiên quản trị không hợp lệ hoặc đã hết hạn.', 401, { code: 'ADMIN_SESSION_EXPIRED' });
   }
 
-  // Enforce CSRF token on mutating requests when authenticated via Cookie
+  // Enforce CSRF token AND Origin/Referer validation on mutating requests when authenticated via Cookie
   const method = request.method.toUpperCase();
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !bearerToken(request)) {
+    const reqOrigin = new URL(request.url).origin;
+    const originHeader = str(request.headers.get('origin'));
+    const refererHeader = str(request.headers.get('referer'));
+    if (originHeader && originHeader !== reqOrigin) {
+      throw httpError('Nguồn yêu cầu (Origin) không hợp lệ (chống giả mạo CSRF).', 403, { code: 'CSRF_ORIGIN_MISMATCH' });
+    }
+    if (!originHeader && refererHeader && !refererHeader.startsWith(reqOrigin)) {
+      throw httpError('Nguồn tham chiếu (Referer) không hợp lệ (chống giả mạo CSRF).', 403, { code: 'CSRF_REFERER_MISMATCH' });
+    }
     const csrfHeader = str(request.headers.get('x-csrf-token'));
-    if (!csrfHeader || csrfHeader !== session.csrf_token) {
+    if (!csrfHeader || !timingSafeStringEqual(csrfHeader, session.csrf_token)) {
       throw httpError('Xác thực chống giả mạo yêu cầu (CSRF) không hợp lệ.', 403, { code: 'CSRF_INVALID' });
     }
   }
@@ -1431,8 +1466,14 @@ async function adminBootstrap(env, request) {
   if (!setupToken) {
     return bad('Chức năng khởi tạo quản trị viên đầu tiên đang tắt (chưa cấu hình ADMIN_BOOTSTRAP_TOKEN).', 403, { code: 'BOOTSTRAP_DISABLED' });
   }
+  await checkRateLimit(env, 'admin_bootstrap_attempt', 5, 10 * 60 * 1000);
+  const existingAdmins = (await env.DB.prepare(`SELECT id, role, roles_json FROM users WHERE status='active'`).all())?.results || [];
+  if (existingAdmins.some(u => parseUserRoles(u).includes('system_admin'))) {
+    await recordAudit(env, { eventType: 'admin.bootstrap.locked', detail: { reason: 'system_admin_already_exists' } });
+    return bad('Hệ thống đã có Quản trị viên hệ thống (system_admin) đang hoạt động. Chức năng khởi tạo lần đầu đã tự động khóa để bảo mật.', 409, { code: 'BOOTSTRAP_ALREADY_COMPLETED' });
+  }
   const body = await readJsonBody(request, 16_384);
-  if (str(body.bootstrap_token) !== setupToken) {
+  if (!timingSafeStringEqual(str(body.bootstrap_token), setupToken)) {
     await recordAudit(env, { eventType: 'admin.bootstrap.failed', detail: { reason: 'invalid_token' } });
     return bad('Mã khởi tạo hệ thống không chính xác.', 403, { code: 'INVALID_BOOTSTRAP_TOKEN' });
   }
@@ -1773,6 +1814,12 @@ async function adminCreateOrUpdateExam(env, examId, request, isCreate = false) {
   const resultReleaseAt = body.result_release_at !== undefined ? (str(body.result_release_at) || null) : (existing?.result_release_at || null);
   const opensAt = body.opens_at !== undefined ? (str(body.opens_at) || null) : (existing?.opens_at || null);
   const closesAt = body.closes_at !== undefined ? (str(body.closes_at) || null) : (existing?.closes_at || null);
+  if (opensAt && closesAt) {
+    const openMs = examTimeMs(opensAt), closeMs = examTimeMs(closesAt);
+    if (!Number.isFinite(openMs) || !Number.isFinite(closeMs) || closeMs <= openMs) {
+      return bad('Thời gian đóng kỳ thi phải sau thời gian mở kỳ thi.', 400, { code: 'INVALID_SCHEDULE_WINDOW' });
+    }
+  }
   const securityProfile = str(body.security_profile ?? existing?.security_profile ?? 'STANDARD');
   const allowClipboard = body.allow_clipboard !== undefined ? (body.allow_clipboard ? 1 : 0) : Number(existing?.allow_clipboard ?? 1);
   const allowPaste = body.allow_paste !== undefined ? (body.allow_paste ? 1 : 0) : Number(existing?.allow_paste ?? 1);
@@ -2355,6 +2402,22 @@ async function adminResultWorkflowAction(env, attemptId, request) {
       pending_manual: pending
     });
   }
+  if (action === 'publish' && (qs.some(q => MANUAL_TYPES.has(str(q.type))) || a.result_policy === 'manual_publish_only') && wfState !== 'approved' && wfState !== 'published') {
+    return bad('Kết quả bài thi cần được Phê duyệt (approve) trước khi Công bố chính thức (publish).', 409, {
+      code: 'APPROVAL_REQUIRED_BEFORE_PUBLISH',
+      current_state: wfState
+    });
+  }
+  if (action === 'approve' && !admin.roles.includes('system_admin')) {
+    const selfGraded = await env.DB.prepare(
+      `SELECT 1 ok FROM assessment_manual_grades WHERE attempt_id=? AND grader_user_id=? LIMIT 1`
+    ).bind(attemptId, admin.user_id).first();
+    if (selfGraded) {
+      return bad('Nguyên tắc phân tách nhiệm vụ: Cán bộ trực tiếp chấm bài không được tự phê duyệt kết quả của chính mình.', 403, {
+        code: 'SEGREGATION_OF_DUTIES_VIOLATION'
+      });
+    }
+  }
   if (action === 'revoke' && !reason) {
     return bad('Bắt buộc phải nhập lý do khi thu hồi kết quả đã công bố.', 400);
   }
@@ -2605,8 +2668,17 @@ async function api(request, env) {
   if (path === '/api/admin/questions/import' && method === 'POST') return adminImportQuestionBank(env, request);
 
   const adminQMatch = path.match(/^\/api\/admin\/questions\/([^/]+)$/);
-  if (adminQMatch && (method === 'PUT' || method === 'PATCH')) {
-    return adminSaveQuestionBankItem(env, decodeURIComponent(adminQMatch[1]), request, false);
+  if (adminQMatch) {
+    const qId = decodeURIComponent(adminQMatch[1]);
+    if (method === 'PUT' || method === 'PATCH') return adminSaveQuestionBankItem(env, qId, request, false);
+    if (method === 'DELETE') {
+      const admin = await authorizeAdmin(env, request, 'questions:delete');
+      const existing = await env.DB.prepare(`SELECT id, code, topic FROM exam_question_bank WHERE id=? AND status!='deleted'`).bind(qId).first();
+      if (!existing) return bad('Không tìm thấy câu hỏi cần xóa/lưu trữ.', 404);
+      await env.DB.prepare(`UPDATE exam_question_bank SET status='deleted', updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(qId).run();
+      await recordAudit(env, { actorUserId: admin.user_id, eventType: 'qbank.deleted', detail: { question_id: qId, code: existing.code } });
+      return ok({ question_id: qId, status: 'deleted' });
+    }
   }
 
   if (path === '/api/admin/candidates' && method === 'GET') return adminListCandidates(env, request);
@@ -2616,6 +2688,20 @@ async function api(request, env) {
   if (path === '/api/admin/monitor' && method === 'GET') return adminMonitorAttempts(env, request);
   const adminMonitorAction = path.match(/^\/api\/admin\/monitor\/([^/]+)\/action$/);
   if (adminMonitorAction && method === 'POST') return adminProctorAction(env, decodeURIComponent(adminMonitorAction[1]), request);
+
+  const adminSupportResolve = path.match(/^\/api\/admin\/support\/([^/]+)\/resolve$/);
+  if (adminSupportResolve && method === 'POST') {
+    const supportId = decodeURIComponent(adminSupportResolve[1]);
+    const admin = await authorizeAdmin(env, request, 'support:write');
+    const body = await readJsonBody(request, 16_384);
+    const resolutionNote = str(body.resolution_note).slice(0, 2000);
+    if (!resolutionNote) return bad('Vui lòng nhập nội dung xử lý sự cố.', 400);
+    const existing = await env.DB.prepare(`SELECT * FROM exam_support_requests WHERE id=?`).bind(supportId).first();
+    if (!existing) return bad('Không tìm thấy yêu cầu hỗ trợ.', 404);
+    await env.DB.prepare(`UPDATE exam_support_requests SET status='resolved', resolution_note=?, resolved_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(resolutionNote, admin.user_id, supportId).run();
+    await recordAudit(env, { examId: existing.exam_id, attemptId: existing.attempt_id, actorUserId: admin.user_id, eventType: 'support.resolved', detail: { support_id: supportId, resolution_note: resolutionNote } });
+    return ok({ support_id: supportId, status: 'resolved', resolution_note: resolutionNote });
+  }
 
   const adminGradingMatch = path.match(/^\/api\/admin\/grading\/([^/]+)(?:\/(grade|workflow))?$/);
   if (adminGradingMatch) {
