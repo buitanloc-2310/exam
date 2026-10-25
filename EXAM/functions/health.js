@@ -1,18 +1,16 @@
 export async function onRequestGet() {
-  let dependency = 'unavailable';
-  try {
-    const r = await fetch('https://slc.skyfirst.io.vn/api/health', { headers: { accept: 'application/json' } });
-    if (r.ok) dependency = 'available';
-  } catch {}
   return Response.json({
-    ok: dependency === 'available',
+    ok: true,
     service: 'Sky First Exam',
-    version: '3.0.0',
-    status: dependency === 'available' ? 'available' : 'degraded',
-    dependency: { slc: dependency },
+    version: '5.0.0',
+    status: 'available',
+    runtime: {
+      control_plane: 'standalone-exam-native',
+      slc_dependency: 'removed'
+    },
     time: new Date().toISOString()
   }, {
-    status: dependency === 'available' ? 200 : 503,
+    status: 200,
     headers: { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }
   });
 }

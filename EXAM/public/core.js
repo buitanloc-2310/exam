@@ -25,7 +25,10 @@ export function eventUnion(...lists){const seen=new Set();return lists.flatMap(x
 export function parseInvite(value,base='https://exam.skyfirst.io.vn'){
  const raw=String(value||'').trim();if(!raw)return '';
  if(!/^(?:https?:\/\/|\/)/i.test(raw))return raw;
- const u=new URL(raw,base);const match=u.pathname.match(/^\/join\/([^/]+)\/?$/);if(match)return decodeURIComponent(match[1]);
+ const u=new URL(raw,base);
+ const allowedHost=new URL(base).hostname;
+ if(u.hostname!==allowedHost&&!u.hostname.endsWith('.skyfirst.io.vn'))throw new Error('Liên kết này không thuộc hệ thống khảo thí Sky First.');
+ const match=u.pathname.match(/^\/join\/([^/]+)\/?$/);if(match)return decodeURIComponent(match[1]);
  const invite=u.searchParams.get('invite');if(invite)return invite;
  const hash=u.hash.match(/^#assessment-invite\/([^/]+)$/);if(hash)return decodeURIComponent(hash[1]);
  throw new Error('Liên kết này không phải liên kết mời dự thi.');

@@ -1,14 +1,14 @@
 {
   "name": "sky-first-exam",
-  "version": "4.1.0",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check public/api.js && node --check public/storage.js && node --check public/core.js && node --check public/exam.js && node --check src/index.js && node --check functions/health.js",
-    "test": "node scripts/validate.mjs && node scripts/validate-runtime.mjs",
+    "check": "node --check public/api.js && node --check public/storage.js && node --check public/core.js && node --check public/exam.js && node --check public/admin.js && node --check src/index.js && node --check functions/health.js",
+    "test": "node scripts/validate.mjs && node scripts/validate-runtime.mjs && node scripts/validate-integration.mjs",
     "build": "npm run check && npm test",
     "dev": "npx --yes wrangler@4.34.0 dev",
     "deploy": "npm run build && npx --yes wrangler@4.34.0 deploy",
-    "validate:integration": "node scripts/validate-integration.mjs ../SLCS/src/index.js"
+    "validate:integration": "node scripts/validate-integration.mjs"
   }
 }

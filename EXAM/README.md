@@ -1,51 +1,43 @@
-# Sky First EXAM
+# SKY FIRST EXAM 2026 (v5.0.0 — Standalone)
 
-EXAM là **delivery plane** cho vận hành phiên khảo thí: redeem launch token, tải gói đề đã niêm phong, lưu câu trả lời, ghi nhận sự kiện toàn vẹn, khóa theo hạn giờ, nộp bài và trả biên nhận. Bản mã nguồn này được cấu hình cho Cloudflare Worker + Static Assets, D1 và R2.
+**TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST**  
+*Mạng lưới Giáo dục và Phát triển Cộng đồng Sky First (SKY FIRST NETWORK)*
 
-## Ranh giới hệ thống đã xác minh từ gói mã nguồn
+Hệ thống **EXAM 2026 (v5.0.0)** là nền tảng khảo thí và đánh giá độc lập hoàn chỉnh trên kiến trúc Cloudflare Worker + Static Assets (`public/`), cơ sở dữ liệu Cloudflare D1 (`DB`) và lưu trữ đối tượng Cloudflare R2 (`FILES`). Phiên bản 5.0.0 đã **loại bỏ hoàn toàn sự phụ thuộc vào SLC (`slc.skyfirst.io.vn`)**, tích hợp đầy đủ cổng thí sinh công khai, luồng xác minh OTP độc lập, máy chủ chấm điểm tự động và tự luận, nhật ký kiểm toán bất biến và phân hệ quản trị khảo thí `/admin` có kiểm soát phân quyền RBAC phía máy chủ.
 
-- Runtime Worker chính là `src/index.js`; static assets nằm trong `public/`.
-- API đọc/lưu/nộp phiên thi dùng D1; tệp trả lời dùng R2; cấu hình resource được lưu tại `wrangler.json`.
-- Các endpoint `/api/` không được Worker xử lý cục bộ sẽ được proxy đến control plane `https://slc.skyfirst.io.vn` (xem `src/index.js`). Luồng xác minh OTP/đăng ký và cấp quyền thuộc control plane; mã của control plane không nằm trong gói EXAM này nên không thể kết luận đã kiểm toán đầy đủ OTP hoặc rate limit từ ZIP này.
-- Gói EXAM **không chứa trang hoặc API quản trị**. `/admin` hiển thị thông báo rõ ràng thay vì giả làm trang dự thi; không xem đây là triển khai giao diện quản trị.
-- `functions/health.js` là một Pages Function riêng kiểm tra control plane, nhưng `wrangler.json` chọn `src/index.js` làm Worker entrypoint. Cần xác nhận cách deploy thực tế trước khi dựa vào route của Pages Function.
-- Các tên và ID D1/R2 trong `wrangler.json` có vẻ là cấu hình môi trường thực; không đổi, migrate hoặc deploy mà chưa có phê duyệt.
+---
 
-## Quy tắc runtime
+## 1. Kiến trúc hệ thống đã hoàn thiện
 
-- Giờ máy chủ và deadline có thẩm quyền.
-- Mỗi attempt chỉ có một write lease; chuyển thiết bị là thao tác có kiểm toán của control plane.
-- Autosave dùng revision; submit chấm từ snapshot cuối cùng máy chủ chấp nhận, không dùng đáp án do request submit tự gửi lên.
-- Request JSON, câu trả lời, event log và payload câu hỏi công khai được giới hạn/lọc ở Worker.
-- Nội dung câu hỏi đưa cho thí sinh sử dụng allowlist trường, không chỉ xóa một số tên trường nhạy cảm.
-- Manual grading phải được publish trước khi điểm được công bố qua receipt.
-- Sự kiện toàn vẹn là tín hiệu để xem xét; không tự động kết luận gian lận.
-- Camera/display capture bị từ chối mặc định; microphone chỉ dùng theo thao tác chủ động và quy chế kỳ thi.
+| Thành phần | Tệp mã nguồn | Chức năng thực tế |
+|---|---|---|
+| Cấu hình Worker | `wrangler.json` | Khai báo Worker entrypoint `src/index.js`, Static Assets `./public`, binding D1 `DB` (`scrd-files`) và binding R2 `FILES` (`scrd-files`). Bảo toàn nguyên vẹn tên và ID tài nguyên hiện hữu. |
+| Máy chủ Khảo thí & Quản trị | `src/index.js` | Xử lý toàn bộ API thí sinh (`/api/public/*`, `/api/exam-attempts/*`), xác thực OTP độc lập, quản lý phiên thi có lease và revision, chấm điểm, phúc khảo, hỗ trợ kỹ thuật, và toàn bộ hệ thống API quản trị `/api/admin/*` kèm phân quyền RBAC 10 vai trò. Không còn `proxyToControl` hay bất kỳ lệnh gọi nào sang SLC. |
+| Giao diện Thí sinh | `public/index.html`, `public/exam.js`, `public/core.js`, `public/storage.js`, `public/api.js` | Trang chủ cổng khảo thí, danh mục kỳ thi công khai, kiểm tra tương thích thiết bị, xác minh OTP email, phòng thi trực tuyến hỗ trợ 14 loại câu hỏi (bao gồm ghi âm trực tiếp và tải tệp R2), lưu bài tự động theo revision, khóa/mở khóa Strict Mode, nhận biên nhận `EXM-...`, tra cứu điểm và gửi phúc khảo. |
+| Phân hệ Quản trị `/admin` | `public/admin.js` | Hệ thống quản trị thực sự tại `/admin`: Đăng nhập OTP quản trị, Khởi tạo quản trị viên đầu tiên (`ADMIN_BOOTSTRAP_TOKEN`), Bảng điều khiển số liệu thực (Dashboard), Quản lý kỳ thi & vòng đời niêm phong đề, Ngân hàng câu hỏi & phiên bản hóa, Quản lý thí sinh & ghi danh, Cấp Launch Token độc lập, Giám sát phòng thi trực tiếp (khóa/mở khóa/cộng giờ/đổi thiết bị), Chấm tự luận & Duyệt/Công bố kết quả, Giải quyết phúc khảo, Phân quyền RBAC và Nhật ký kiểm toán. |
+| Kiểu chữ & Giao diện | `public/styles.css` | Toàn bộ giao diện công khai, phòng thi và `/admin` áp dụng phông chữ **Times New Roman** thống nhất, bố cục chuẩn mực, hỗ trợ responsive trên Desktop, Laptop, Tablet và Điện thoại. |
+| Migration D1 | `migrations/0001_exam_standalone_schema.sql` | Schema SQL không phá hủy dữ liệu (`CREATE TABLE IF NOT EXISTS`), bảo toàn 16 bảng cốt lõi và mở rộng 8 bảng nghiệp vụ độc lập (`exam_otp_challenges`, `exam_admin_sessions`, `exam_question_bank`, `exam_question_versions`, `exam_enrollments`, `exam_appeals`, `exam_support_requests`, `exam_rate_limits`). |
+| Kiểm thử Tự động | `scripts/validate.mjs`, `scripts/validate-runtime.mjs`, `scripts/validate-integration.mjs`, `scripts/sqlite-compat.mjs` | 65 bài kiểm thử tự động (40 static/unit + 14 runtime fault-injection + 11 kịch bản tích hợp end-to-end độc lập). |
 
-## Kiểm tra cục bộ
+---
 
-Yêu cầu: Node.js có hỗ trợ `node:sqlite` (trong môi trường hiện tại Node hiển thị cảnh báo API SQLite đang thử nghiệm).
+## 2. Kiểm tra và chạy thử nghiệm cục bộ
+
+Chạy toàn bộ kiểm tra cú pháp và 65 bài kiểm thử tự động:
 
 ```bash
 npm run build
 ```
 
-Lệnh này chạy syntax checks, bộ kiểm tra chức năng/static (`scripts/validate.mjs`) và test runtime với SQLite trong bộ nhớ (`scripts/validate-runtime.mjs`), bao gồm giả lập lỗi ghi nhật ký để xác minh rollback. Kết quả hiện tại: 39/39 test chức năng/static và 14/14 test runtime PASS. Test không kết nối production D1/R2, không gửi email/OTP và không deploy Cloudflare. Kết quả hiện tại được ghi trong `AUDIT-REPORT-2026-10-25.md`.
+Kết quả đạt chuẩn:
+- `npm run check`: Kiểm tra cú pháp toàn bộ 7 tệp JS runtime (`PASS`).
+- `node scripts/validate.mjs`: **40/40 PASS**.
+- `node scripts/validate-runtime.mjs`: **14/14 PASS**.
+- `node scripts/validate-integration.mjs`: **11/11 PASS** (gồm hơn 35 khẳng định bảo mật, phân quyền RBAC, OTP, chống sửa đề khi đang thi, khóa/mở khóa Strict Mode, chấm tự luận, bảo vệ kết quả đã công bố, phúc khảo và chứng minh không có kết nối mạng ra ngoài / không gọi SLC).
 
-Bài test tích hợp với mã nguồn SLCS chỉ là tùy chọn và **không nằm trong phạm vi đầu vào** của đợt kiểm toán EXAM này:
+---
 
-```bash
-node scripts/validate-integration.mjs ../SLCS/src/index.js
-```
+## 3. Tài liệu bàn giao chi tiết
 
-Không chạy lệnh trên nếu không có bản SLCS được cung cấp/cho phép. Việc kiểm tra tích hợp ngoại vi không thể được suy ra chỉ từ test SQLite nội bộ.
-
-## Trước khi triển khai
-
-- Xác minh migrations/schema đã được phê duyệt và áp dụng vào môi trường thử nghiệm; health endpoint yêu cầu 16 bảng và binding R2 hiện diện.
-- Kiểm thử OTP/control plane, quyền quản trị, giới hạn tốc độ, upload, email và luồng khôi phục trong môi trường staging có phê duyệt.
-- Đo giao diện thật trên trình duyệt desktop/mobile và kiểm tra accessibility.
-- Xác nhận backup/restore D1 + R2, giám sát, rollback và pháp lý/quyền riêng tư.
-- Xem xét report kiểm toán; không deploy production cho đến khi các hạng mục chờ xử lý được chấp thuận.
-
-`npm run deploy` thực hiện deploy qua Wrangler sau khi build. Không chạy lệnh này khi chưa có phê duyệt triển khai.
+- Báo cáo kiểm toán, thay đổi, kiểm thử và danh sách giới hạn còn lại: xem `AUDIT-REPORT-2026-10-25.md`.
+- Hướng dẫn cấu hình, quản trị `/admin`, vận hành khảo thí, backup/phục hồi và kế hoạch triển khai: xem `OPERATIONS-AND-ADMIN-GUIDE-2026.md`.

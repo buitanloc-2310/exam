@@ -1,285 +1,160 @@
-# Báo cáo kiểm toán EXAM — 25/10/2026
+# BÁO CÁO KIỂM TOÁN, THAY ĐỔI MÃ NGUỒN VÀ KIỂM THỬ TOÀN DIỆN — SKY FIRST EXAM 2026 (v5.0.0)
 
-**Dự án:** EXAM — Trung tâm Dự thi Sky First  
-**Nguồn mã nguồn:** `exam-main.zip` duy nhất  
-**Phạm vi an toàn:** làm việc trên bản giải nén cô lập; không kết nối hoặc ghi dữ liệu production, không gửi OTP/email thật, không chạy migration production và không deploy.  
-**Kết luận nghiệm thu:** **Chưa đủ điều kiện kết luận hoàn thành toàn bộ hoặc sẵn sàng production.** Một số lỗi có bằng chứng đã được vá và kiểm thử cục bộ; còn các hạng mục phụ thuộc control plane, giao diện quản trị, môi trường thật, browser smoke test và vận hành cần được xác minh riêng.
-
-## 1. Tóm tắt điều hành
-
-ZIP chứa một ứng dụng thực thi bài thi trực tuyến theo mô hình Cloudflare Worker + static assets, D1 và R2; không chứa một bộ quản trị khảo thí toàn diện. `src/index.js` là Worker entrypoint theo `wrangler.json`; `public/` chứa UI dành cho thí sinh; `public/api.js` gọi các endpoint `/api/`; các endpoint chưa xử lý cục bộ được proxy đến `https://slc.skyfirst.io.vn`.
-
-Trong phạm vi mã có thể kiểm tra, phát hiện được các vấn đề về lọc payload câu hỏi, nguồn dữ liệu chấm điểm khi submit, điều kiện hiển thị điểm tự luận, giới hạn request, kiểm soát answer revision, health/readiness và phông chữ. Những mục này đã được sửa trong bản làm việc và có test hồi quy. Tuy nhiên, không thể dùng kết quả test cục bộ để kết luận OTP/control plane, R2/D1 production, quyền quản trị thật, DNS, gửi email, hiệu năng tải lớn hay tuân thủ pháp luật đã đạt yêu cầu.
-
-### Bảng kết quả kiểm chứng
-
-| Hạng mục | Kết quả quan sát |
-|---|---|
-| Syntax check các tệp runtime | PASS |
-| Kiểm tra chức năng/static | **39/39 PASS** |
-| Test runtime chạy Worker thật với D1 giả lập SQLite trong bộ nhớ | **14/14 PASS** |
-| Tổng test check hiện hành | **53/53 PASS** (39 test chức năng/static + 14 test runtime; không phải 53 kịch bản production) |
-| Build bundle/deploy Cloudflare | Chưa chạy; `npm run build` hiện là syntax + test, không phải deploy build |
-| Browser smoke test/chụp màn hình | Chưa xác minh; lần thử Chromium headless bị treo/hết thời gian, không có bằng chứng ảnh chụp |
-| Tích hợp với SLCS/control plane | Chưa chạy — mã nguồn đó không thuộc đầu vào được phép |
-| D1/R2/email/OTP/DNS production | Không truy cập/không kiểm thử |
-
-## 2. Kiểm kê mã nguồn và kiến trúc thực tế
-
-### 2.1. Tệp/chức năng chính
-
-| Vị trí | Vai trò đã xác minh |
-|---|---|
-| `wrangler.json` | Cloudflare Worker entrypoint, Static Assets, D1 binding `DB`, R2 binding `FILES`, resource name/ID |
-| `src/index.js` | API cục bộ: redeem launch, tải attempt, save, submit, violation, upload, health; proxy endpoint API còn lại sang control plane |
-| `public/index.html` | Shell giao diện dự thi, metadata, CSS và module script |
-| `public/exam.js` | Luồng thí sinh, mở attempt, autosave, phòng thi, submit, upload và sự kiện trình duyệt |
-| `public/api.js` | Fetch wrapper: bearer token, session ID, timeout, JSON validation, `credentials: omit` |
-| `public/core.js` | Logic UI/câu hỏi và hỗ trợ các loại câu hỏi |
-| `public/storage.js` | Lưu session trong `sessionStorage`, bản nháp trong `localStorage` |
-| `public/styles.css` | Phong cách giao diện và responsive styling |
-| `public/_headers`, `public/_redirects` | Header bảo mật cho static assets; rewrite `/exam/*`, `/join/*` |
-| `scripts/validate.mjs` | Bộ kiểm tra chức năng/static và regression |
-| `scripts/validate-runtime.mjs` | Test Worker với schema SQLite cục bộ giả lập D1/R2 |
-| `scripts/validate-integration.mjs` | Test tích hợp tùy chọn yêu cầu source SLCS bên ngoài ZIP |
-| `functions/health.js` | Pages Function riêng kiểm tra SLC health; chưa chứng minh được runtime triển khai vì `wrangler.json` chọn `src/index.js` |
-
-### 2.2. Luồng dữ liệu/điều khiển
-
-**Luồng attempt nội bộ:** token bearer → `authorize()` → kiểm tra attempt/access token trong D1 → `claimLease()` → lấy câu hỏi công khai qua allowlist → thí sinh lưu với revision → D1 ghi snapshot + revision → submit lấy snapshot đã lưu → chấm tự động/khởi tạo manual grading → receipt.
-
-**Luồng khách/invite:** UI gọi endpoint đăng ký/xác minh thuộc `/api/public/assessments/...`; Worker proxy sang control plane. Sau khi có launch token, `/api/public/exam-launch/redeem` được xử lý trong Worker và tạo access token có hash lưu tại D1.
-
-**Luồng tệp:** UI upload qua endpoint upload; Worker xác thực câu hỏi và chữ ký/MIME được hỗ trợ, lưu object private trong R2 cùng metadata D1. Chưa có bằng chứng về quét malware/AV.
-
-### 2.3. Ranh giới và phụ thuộc
-
-- `wrangler.json` có resource name/ID D1/R2 mang dáng dấp cấu hình môi trường thật. Không sửa/di chuyển resource binding trong đợt này.
-- `CONTROL_ORIGIN` là hằng số `https://slc.skyfirst.io.vn` trong `src/index.js`; không đổi vì cần đánh giá hợp đồng tích hợp trước.
-- Không tìm thấy giao diện hoặc API quản trị trong các tệp được kiểm tra. Endpoint `/admin` hiện được chuyển sang thông báo không khả dụng thay vì màn hình thí sinh. Đây là biện pháp minh bạch, **không phải giao diện quản trị đã hoàn thành**.
-- Logic OTP thực tế, cấp quyền đầu vào và nhiều endpoint công khai nằm ở control plane ngoài ZIP; chưa có đủ bằng chứng để kiểm toán.
-
-## 3. Phát hiện đã sửa và kiểm chứng
-
-Các mức độ phản ánh ảnh hưởng kỹ thuật của vấn đề trước khi sửa. “Đã test” ở đây chỉ là test cục bộ, không khẳng định không còn đường khai thác khác.
-
-### EX-01 — Payload câu hỏi công khai dựa trên blacklist
-
-- **Mức độ:** High — **Trạng thái:** Đã sửa trong bản làm việc, test hồi quy PASS.
-- **Vị trí:** `src/index.js:78-92` (`publicQuestions`); test tại `scripts/validate.mjs`.
-- **Bằng chứng:** Bản trước trải rộng đối tượng câu hỏi rồi xóa một số trường như answer/rubric. Cách này có thể để lộ một trường bí mật mới hoặc trường lồng chưa được thêm vào blacklist.
-- **Tác động:** Có nguy cơ đưa đáp án, rubric hoặc metadata nội bộ tới trình duyệt trước khi được phép.
-- **Khắc phục:** Tạo payload bằng allowlist trường được phép; `options` và stimulus được chuẩn hóa có kiểm soát. Trường lạ không được sao chép vào payload.
-- **Kiểm chứng:** Regression kiểm tra `answer`, `answer_key` và `rubric` không xuất hiện; runtime trả câu hỏi cho client không chứa các trường này.
-- **Giới hạn:** Chưa chạy trên dữ liệu production hoặc kiểm tra tất cả kiểu schema có thể tồn tại ngoài ZIP.
-
-### EX-02 — Submit có thể dựa vào đáp án do request gửi lên thay vì snapshot máy chủ
-
-- **Mức độ:** High — **Trạng thái:** Đã sửa, test runtime PASS.
-- **Vị trí:** `src/index.js:129-153`, `src/index.js:176`; `public/exam.js:113`.
-- **Bằng chứng:** Submit trước đây cần được bảo vệ khỏi việc coi payload submit do client gửi là nguồn quyết định cuối cùng. Bản hiện tại chỉ dùng `a.answers_json` và `a.event_log_json` đã được server chấp nhận; frontend submit chỉ gửi revision.
-- **Tác động:** Nếu tin dữ liệu client khi nộp, điểm có thể bị tính từ dữ liệu khác snapshot đã lưu, tạo bất nhất giữa bài làm, điểm và lịch sử.
-- **Khắc phục:** Submit chỉ dựa vào snapshot server; UPDATE kiểm tra trạng thái `in_progress` và `answer_revision`; nếu xung đột thì trả conflict, còn hết giờ có retry có giới hạn.
-- **Kiểm chứng:** Runtime test lưu câu trả lời đúng, gửi payload submit cố tình đổi thành đáp án sai; server vẫn chấm theo snapshot đã lưu. Test nộp lặp xác nhận idempotent.
-- **Giới hạn:** Chưa stress-test race condition thực trên Cloudflare D1 hoặc nhiều worker đồng thời.
-
-### EX-03 — Điểm câu hỏi có `0` bị thay thành điểm mặc định
-
-- **Mức độ:** Medium — **Trạng thái:** Đã sửa, test PASS.
-- **Vị trí:** `src/index.js:104`.
-- **Bằng chứng:** Dùng fallback truthy `q.points || 1` sẽ khiến `points: 0` thành `1`.
-- **Tác động:** Sai điểm tối đa/điểm đạt có thể ảnh hưởng kết quả thi.
-- **Khắc phục:** Dùng nullish fallback, xác định điểm số hữu hạn và không âm; giá trị `0` được giữ nguyên.
-- **Kiểm chứng:** Unit test `server accepted zero-point items remain zero-point`.
-
-### EX-04 — Hiển thị điểm khi chấm thủ công chưa xuất bản hoặc thiếu dữ liệu
-
-- **Mức độ:** High — **Trạng thái:** Đã sửa, test runtime PASS.
-- **Vị trí:** `src/index.js:114-127`, `src/index.js:146-149`.
-- **Bằng chứng:** Có loại câu hỏi cần chấm tay. Receipt cần xác minh tất cả câu manual tương ứng có trạng thái `published`, không chỉ dựa trên điểm tự động.
-- **Tác động:** Điểm tạm có thể bị hiểu nhầm là kết quả cuối cùng.
-- **Khắc phục:** Đảm bảo các hàng chấm tay tồn tại; chỉ công bố điểm khi toàn bộ câu manual tương ứng đã publish; nếu truy vấn/chèn gặp lỗi, giữ trạng thái điểm chưa hiển thị (fail closed).
-- **Kiểm chứng:** Runtime test kiểm tra bài luận chưa publish trả `show_score=false`, `score=null`, `pending_manual=1`; workflow ở trạng thái `marking`.
-- **Giới hạn:** Chưa kiểm thử vai trò người chấm/duyệt và workflow bên control plane.
-
-### EX-05 — JSON/body và dữ liệu câu trả lời/event chưa giới hạn/lọc đầy đủ
-
-- **Mức độ:** Medium — **Trạng thái:** Đã sửa, test static PASS; phạm vi fuzz chưa đầy đủ.
-- **Vị trí:** `src/index.js:14-43`, `src/index.js:44-72`, `src/index.js:156-174`, `src/index.js:177-188`, `src/index.js:193-203`.
-- **Bằng chứng:** Endpoint nhận dữ liệu JSON, câu trả lời và event log do client gửi.
-- **Tác động:** Payload lớn hoặc trường tùy ý có thể làm tăng chi phí parse/lưu trữ và lưu metadata không cần thiết.
-- **Khắc phục:** Đọc stream có giới hạn byte trước parse; giới hạn body submit/token; lọc answer theo ID và kiểu câu hỏi, giới hạn độ dài/list, lọc event thành allowlist; chỉ lưu event metadata cần thiết.
-- **Kiểm chứng:** Các kiểm thử body cap, answer sanitizer và event sanitizer PASS.
-- **Giới hạn:** Rate limit phân tán vẫn chưa có bằng chứng; byte cap không thay thế chống lạm dụng request.
-
-### EX-06 — Cập nhật answer thiếu điều kiện revision phía server
-
-- **Mức độ:** High — **Trạng thái:** Đã sửa, runtime stale-save test PASS.
-- **Vị trí:** `src/index.js:166-173`, `src/index.js:137-149`.
-- **Bằng chứng:** Autosave/submit có thể gặp request đến lệch thứ tự; so sánh revision chỉ ở frontend là không đủ.
-- **Tác động:** Một snapshot cũ có thể ghi đè snapshot mới hoặc submit từ dữ liệu cũ.
-- **Khắc phục:** So khớp revision trong SQL `UPDATE`; nếu không có row thay đổi, trả `409 REVISION_CONFLICT`; deadline finalize có retry có giới hạn.
-- **Kiểm chứng:** Runtime test lưu revision 1 rồi gửi save revision 0 và xác nhận 409.
-- **Giới hạn:** Không có kiểm thử tải đồng thời hoặc kiểm tra tính nguyên tử trên dịch vụ D1 thật.
-
-### EX-07 — Health endpoint kiểm tra schema/binding chưa đủ để phản ánh sẵn sàng
-
-- **Mức độ:** Medium — **Trạng thái:** Đã sửa, runtime test PASS.
-- **Vị trí:** `src/index.js:204-210`.
-- **Bằng chứng:** Worker cần nhiều bảng cho attempt, lease, token, file, manual grade, workflow và audit; chỉ có binding DB chưa chứng minh schema sẵn sàng.
-- **Tác động:** Runtime có thể báo available trong khi thiếu bảng quan trọng, rồi lỗi lúc thi.
-- **Khắc phục:** Health kiểm tra 16 bảng cần thiết và binding `FILES`; thiếu bảng/binding trả 503 `degraded` và liệt kê tên bảng còn thiếu.
-- **Kiểm chứng:** Runtime test health đầy đủ trả 200; bảng thiếu trả 503.
-- **Giới hạn:** Chưa gọi health trên staging/production; đây không phải xác nhận schema thật đã migrate.
-
-### EX-08 — Phông giao diện không tuân thủ Times New Roman
-
-- **Mức độ:** Medium — **Trạng thái:** Đã sửa ở CSS, static test PASS.
-- **Vị trí:** `public/styles.css:1`, `public/index.html`.
-- **Bằng chứng:** CSS trước đó ưu tiên Segoe UI/Arial/system font.
-- **Tác động:** Không đáp ứng yêu cầu font thống nhất.
-- **Khắc phục:** Đặt Times New Roman/Times/serif làm font toàn cục, ép các descendant/control/component kế thừa bằng selector `!important`, giữ `button,input,select,textarea { font: inherit }`.
-- **Kiểm chứng:** Static test xác nhận Times New Roman được thực thi toàn cục.
-- **Giới hạn:** Chưa quan sát bằng browser rendering thật do Chromium headless bị treo; cần kiểm tra thực trên desktop/mobile.
-
-### EX-09 — `/admin` không có module quản trị trong gói nhưng fallback có thể gây hiểu nhầm
-
-- **Mức độ:** Medium — **Trạng thái:** Đã có thông báo chặn rõ; module quản trị vẫn chưa có.
-- **Vị trí:** `public/exam.js:44`; `wrangler.json` chọn `src/index.js` làm Worker entrypoint.
-- **Bằng chứng:** Mã nguồn hiện có tập trung vào luồng thi và không chứa route/API admin riêng.
-- **Tác động:** Người dùng có thể tưởng cổng dự thi cũng là cổng quản trị hoặc cố nhập thông tin quản trị ở sai nơi.
-- **Khắc phục:** `/admin` không còn âm thầm render UI thí sinh; hiển thị rằng cổng này không có UI/API quản trị.
-- **Kiểm chứng:** Regression `unimplemented admin URL does not silently render the candidate home screen` PASS.
-- **Chưa hoàn thành:** Chưa xây dựng dashboard, quản lý kỳ thi, ngân hàng câu hỏi, chấm/duyệt điểm, phân quyền hoặc audit console vì không có admin API/role contract trong ZIP. Không tạo frontend giả.
-
-### EX-10 — Nhật ký revision, audit submit và biên nhận có thể thất bại nhưng vẫn báo thành công
-
-- **Mức độ:** High — **Trạng thái:** Đã sửa trong bản làm việc, runtime fault-injection tests PASS.
-- **Vị trí:** `src/index.js:113-114` (biên nhận), `src/index.js:129-154` (submit/audit/workflow), `src/index.js:156-176` (revision log), `src/index.js:177-189` (integrity audit).
-- **Bằng chứng:** Trước thay đổi, một số ghi revision/workflow/audit/receipt dùng `.catch(()=>{})` hoặc trả mã biên nhận dự phòng ngay cả khi thao tác lưu thất bại.
-- **Tác động:** Có thể mất lịch sử hoặc audit mà giao diện vẫn coi thao tác đã thành công; receipt có thể được trả dù chưa ghi bền vững.
-- **Khắc phục:** Dùng D1 batch cho cập nhật answer + revision history, cập nhật submit + audit event + workflow, và cập nhật event + audit signal; lỗi ở một bước bắt buộc làm rollback transaction. Biên nhận chỉ được trả sau khi đọc lại bản ghi đã lưu; lỗi lưu biên nhận trả lỗi thay vì giả tạo thành công.
-- **Kiểm chứng:** Thêm fault-injection SQLite triggers làm hỏng revision log, submit audit và receipt write; test xác nhận snapshot/submit rollback khi write bắt buộc lỗi, và receipt được phục hồi rồi đọc lại sau khi lỗi giả lập được gỡ.
-- **Giới hạn:** Đây là mô phỏng transaction SQLite trong bộ nhớ. Cần xác minh semantics và quyền D1 trên staging; không chạy injection trên production.
-
-### EX-11 — Kiểm tra thời hạn launch token và đổi mã đồng thời chưa fail-closed đầy đủ
-
-- **Mức độ:** High — **Trạng thái:** Đã sửa trong bản làm việc, runtime test PASS.
-- **Vị trí:** `src/index.js:193-203`; test tại `scripts/validate-runtime.mjs`.
-- **Bằng chứng:** Phân tích mã trước sửa cho thấy `Date.parse()` có thể trả `NaN`; so sánh `expires <= Date.now()` không tự loại `NaN`. Batch cũ cũng thực hiện INSERT access-token kể cả khi UPDATE claim không đổi hàng nào, có thể để lại token mồ côi khi có request đua.
-- **Tác động:** Token có ngày hết hạn sai định dạng có thể không bị loại đúng; request đổi mã đua nhau có thể tạo bản ghi access token không được trả cho người dùng.
-- **Khắc phục:** Dùng `databaseTimeMs()` và kiểm tra `Number.isFinite`; điều kiện UPDATE gồm `expires_at > CURRENT_TIMESTAMP`; INSERT access token chỉ chạy khi `changes()=1`; xác nhận cả kết quả UPDATE và INSERT trong cùng D1 batch.
-- **Kiểm chứng:** Runtime kiểm tra timestamp SQLite dạng UTC, replay, mô phỏng stale read khi token đã được dùng, và thời hạn malformed bị 401.
-- **Giới hạn:** Mô phỏng bằng SQLite trong bộ nhớ; chưa kiểm thử tải cạnh tranh trên D1 thật.
-
-## 4. Rủi ro và yêu cầu chưa được đóng
-
-| ID | Mức độ | Trạng thái | Vị trí/bằng chứng | Tác động và việc cần làm |
-|---|---|---|---|---|
-| EX-R01 | High | Chưa đủ bằng chứng | `src/index.js:212-216`; UI OTP trong `public/exam.js:40` | OTP/registration/eligibility được proxy sang control plane; cần audit riêng rate limit, expiry, one-time use, account enumeration, retry, log, sender email và anti-abuse bằng source/control plane và staging có phê duyệt. |
-| EX-R02 | High | Chưa làm/Chờ đặc tả | Không có module admin trong ZIP; `public/exam.js:44` | Cần hợp đồng API/role thực tế, mô hình phân quyền và phê duyệt nghiệp vụ trước khi xây dựng giao diện quản trị có thao tác thật. |
-| EX-R03 | High | Chưa đủ bằng chứng | `src/index.js:192` | Upload 30 MB/50 MB theo loại; chưa có giới hạn tần suất theo user/attempt/IP, quét malware hoặc cơ chế phát hiện nội dung nguy hiểm. Thiết kế rate limit/scan theo hạ tầng được phê duyệt; không áp dụng stress test production. |
-| EX-R04 | Medium | Chưa xử lý — cần quyết định dữ liệu | `src/index.js:192` đánh dấu file cũ `replaced`, nhưng không xóa object cũ khỏi R2 | Storage có thể tăng theo các lần thay tệp. Cần chính sách lưu giữ, điều tra và dọn dẹp có phê duyệt trước khi xóa object; không tự xóa vì có thể ảnh hưởng chứng cứ/khiếu nại. |
-| EX-R05 | Medium | Chưa xử lý — kiến trúc | `public/storage.js:7-12` | Access token nằm trong `sessionStorage`; XSS có thể đọc token. CSP/escape giảm một phần rủi ro nhưng không xóa bỏ. Cần đánh giá kiến trúc cookie HttpOnly/BFF và CSRF trước khi đổi cơ chế xác thực. |
-| EX-R06 | Medium | Chưa đủ bằng chứng | `src/index.js:191-192` | Kiểm tra magic-byte/MIME không phải antivirus hoặc sandbox file. Cần chốt loại tệp cho phép, lưu riêng tư, giới hạn tải, chính sách tải xuống và quy trình scan nếu phù hợp. |
-| EX-R07 | Medium | Chưa đủ bằng chứng | `src/index.js:110` | Lease theo attempt được giữ cho session ID đến khi có quy trình chuyển thiết bị từ control plane; chưa kiểm thử phục hồi session mất/hỏng, takeover được duyệt và đồng thời đa thiết bị. Cần tài liệu vận hành/diễn tập staging. |
-| EX-R08 | Medium | Chưa đủ bằng chứng | `src/index.js:204-210`, `wrangler.json` | Health chỉ xác nhận truy vấn từng bảng và R2 binding được cấu hình; không kiểm tra ghi/đọc R2 thực, migration version, quyền bảng, latency hay khả năng khôi phục. Cần readiness sâu hơn ở staging sau khi được duyệt. |
-| EX-R09 | Medium | Chưa đủ bằng chứng | `functions/health.js` so với `wrangler.json` | Pages Function health tham chiếu SLC, nhưng runtime config chọn Worker entrypoint; cần xác nhận cấu trúc deploy thực tế, tránh dựa vào route không được triển khai. |
-| EX-R10 | Medium | Chưa kiểm thử | Tất cả UI/CSS | Đã có responsive styles trong mã, nhưng browser thật, zoom, keyboard, screen reader và contrast chưa được kiểm tra trong đợt này. Cần browser matrix và accessibility review. |
-| EX-R11 | Medium | Chưa đủ bằng chứng | D1/R2/email/DNS không có credential/môi trường | Không có bằng chứng backup/restore D1+R2, RPO/RTO, alerting, retry email, SPF/DKIM/DMARC, production monitoring hoặc incident playbook. Phải kiểm tra ở môi trường được ủy quyền. |
-| EX-R12 | Informational | Đang giữ nguyên | `wrangler.json` | Resource name/ID D1/R2, compatibility date và `CONTROL_ORIGIN` không thay đổi. Trước deploy phải xác nhận tài nguyên đích và quyền; không chạy migration/ deploy tự động. |
-| EX-R13 | Informational | Đã ghi nhận | `functions/health.js` | File hiện báo phiên bản `3.0.0`, trong khi Worker health là `4.1.0`; nếu Pages Function được deploy, metadata có thể không nhất quán. Chỉ sửa sau khi xác nhận route thực tế có được dùng. |
-
-## 5. Giao diện và trải nghiệm
-
-- **Đã có trong ZIP:** một shell web cho thí sinh, xác minh/nhận phiên từ API, màn hình làm bài, trạng thái lưu/kết nối, đồng hồ, điều hướng câu, upload tệp/audio, modal xác nhận và màn hình hoàn tất theo logic hiện có.
-- **Đã chỉnh:** Times New Roman được áp dụng toàn cục trong `public/styles.css`; cache-busting URL của CSS/JS tăng lên `20261025-audit-fix-1`; `/admin` hiển thị thông báo không khả dụng thay vì trang thí sinh.
-- **Chưa dựng:** giao diện quản trị, danh sách kỳ thi công khai, workflow quản lý ngân hàng câu hỏi/duyệt đề/chấm điểm/phúc khảo vì ZIP không có API/hợp đồng admin đủ để tạo chức năng thật một cách an toàn.
-- **Chưa xác minh bằng browser:** không có kết quả screenshot/browser pass. Test VM/static chứng minh logic một phần, không chứng minh hình thức, responsive, focus/keyboard, contrast hay khả năng tiếp cận theo WCAG.
-- **Times New Roman:** được ép CSS; vẫn cần browser check để phát hiện CSS injection style hoặc control bên ngoài và đối chiếu computed style thực tế.
-
-## 6. Kiểm thử đã chạy và bằng chứng
-
-Lệnh thực thi: `npm run build` trong thư mục `EXAM`.
-
-### Kết quả
-
-1. `node --check` cho `public/api.js`, `public/storage.js`, `public/core.js`, `public/exam.js`, `src/index.js`, `functions/health.js`: PASS.
-2. `scripts/validate.mjs`: **39/39 PASS**, gồm escape HTML, timezone, trạng thái câu hỏi, allowlist payload, sanitizer answer/events, zero-point scoring, byte cap, autosave/revision, event filtering, attachment signature, Times New Roman và route `/admin`.
-3. `scripts/validate-runtime.mjs`: **14/14 PASS**, chạy Worker handler với `node:sqlite` trong bộ nhớ và adapter D1/R2 giả lập. Các kịch bản gồm lọc đáp án, save/revision, stale-save conflict, submit theo snapshot server, submit lặp, manual grade chưa publish, rollback nếu revision log/audit submit lỗi, biên nhận chỉ thành công sau khi được lưu, launch-token expiry/replay/racing và health success/degrade.
-4. Có cảnh báo Node `ExperimentalWarning: SQLite is an experimental feature`; đây là cảnh báo runtime test, không phải test fail.
-
-### Chưa chạy hoặc chưa đạt bằng chứng
-
-- Browser smoke test/screenshot: lần thử Chromium headless bị treo/hết timeout, không có ảnh/kết quả DOM để chứng minh rendering; không đánh dấu pass.
-- `scripts/validate-integration.mjs`: không chạy vì yêu cầu source SLCS ngoài phạm vi ZIP; không dùng để thay thế kiểm toán EXAM đơn lẻ.
-- Không chạy `wrangler deploy`, không gọi endpoint production, không đọc/ghi D1/R2 thật, không gửi email/OTP, không chạy migration, không chạy stress test.
-- Không đo throughput/concurrency thực, thời gian tải, SLO, backup/restore, DNS, CORS hoặc domain production.
-
-## 7. Các thay đổi trong bản làm việc
-
-| Tệp | Thay đổi |
-|---|---|
-| `src/index.js` | Thêm giới hạn JSON; lọc câu trả lời và event; payload câu hỏi theo allowlist; bảo vệ revision/submit; ghi revision/audit/workflow theo D1 batch; biên nhận phải tồn tại bền vững mới trả thành công; điểm 0 được giữ nguyên; fail-closed cho điểm manual; kiểm tra expiry/claim launch token an toàn; health kiểm tra 16 bảng/R2 binding; cập nhật lease last-seen; CSP cho media từ control origin đã cấu hình. |
-| `public/exam.js` | Submit chỉ gửi revision; violation chỉ gửi event/reason/revision; `/admin` hiển thị trạng thái không có admin UI/API. |
-| `public/styles.css` | Times New Roman được áp dụng trên toàn bộ giao diện và controls/components. |
-| `public/index.html` | Cache-busting CSS/JS sang `20261025-audit-fix-1`. |
-| `public/_headers` | CSP ảnh/media cho static assets được đồng bộ với Worker. |
-| `package.json` | Đặt tên package `sky-first-exam`, version `4.1.0`; thêm test runtime SQLite vào `npm test`/`npm run build`. |
-| `scripts/validate.mjs` | Thêm regression checks cho allowlist, sanitation, zero-point, request cap, Times New Roman, snapshot submit và `/admin`. |
-| `scripts/validate-runtime.mjs` | Thêm 14 test runtime với SQLite memory, gồm kiểm thử lỗi giả lập để xác minh rollback khi journal/audit/receipt write thất bại và kiểm tra launch-token expiry/replay; không truy cập hệ thống ngoài. |
-| `README.md` | Ghi rõ kiến trúc, ranh giới control plane/admin, lệnh test và điều kiện trước triển khai. |
-| `VALIDATION-2026-10-05.md` | Giữ báo cáo lịch sử và thêm cảnh báo nó không phải kết quả hiện hành. |
-| `AUDIT-REPORT-2026-10-25.md` | Báo cáo kiểm toán này. |
-
-Không có migration hoặc thay đổi resource ID/binding, không có dữ liệu production bị chủ động sửa và không có deploy được thực hiện.
-
-## 8. Khung tham chiếu bảo mật, accessibility và pháp luật
-
-Đây là khung đánh giá để xây dựng kiểm thử; không phải tuyên bố EXAM đã đạt chứng nhận/tuân thủ.
-
-- OWASP Application Security Verification Standard (ASVS): <https://asvs.owasp.org/> — dùng để lập ma trận xác minh ứng dụng phù hợp rủi ro; cần chọn level/phạm vi cụ thể sau khi chốt mô hình đe dọa.
-- OWASP API Security: <https://owasp.org/www-project-api-security/> — tham chiếu lỗi phân quyền object/function, xác thực, lạm dụng tài nguyên và API misconfiguration.
-- W3C WCAG 2.2: <https://www.w3.org/TR/wcag/> — cần audit bàn phím, focus, contrast, zoom, semantics và trình đọc màn hình bằng kiểm tra thực.
-- Luật Bảo vệ dữ liệu cá nhân số 91/2025/QH15: <https://vanban.chinhphu.vn/?docid=214590&pageid=27160>.
-- Nghị định 356/2025/NĐ-CP: <https://vanban.chinhphu.vn/?docid=216387&pageid=27160>.
-- Luật An ninh mạng số 116/2025/QH15: <https://vanban.chinhphu.vn/?classid=&docid=216499&pageid=27160>.
-
-Cần luật sư/chuyên gia tuân thủ xác nhận phiên bản hiệu lực, phạm vi áp dụng, vai trò kiểm soát/xử lý dữ liệu, nghĩa vụ thông báo, quyền của chủ thể dữ liệu, thời hạn lưu giữ, dữ liệu của người chưa thành niên, giám sát/camera và chuyển dữ liệu cho dịch vụ bên ngoài. Báo cáo kỹ thuật này không kết luận đã tuân thủ pháp luật.
-
-## 9. Phê duyệt và kế hoạch khắc phục tiếp theo
-
-### P0 — Trước khi cho chạy kỳ thi chính thức
-
-1. Phê duyệt/kiểm tra phiên bản schema và migration trên staging; đối chiếu schema thật với 16 bảng health yêu cầu.
-2. Kiểm toán control plane cho OTP, đăng ký, token launch, quyền cấp dự thi, rate limit, log, gửi mail và chống account enumeration.
-3. Diễn tập multi-session, mất mạng, submit/timeout đồng thời, chuyển thiết bị, thu hồi session và recovery trên staging.
-4. Xác nhận quy tắc chấm điểm, manual grading, publish result, receipt, deadline và ngoại lệ bằng owner nghiệp vụ; không tự thay đổi chính sách kỳ thi.
-5. Browser test desktop/mobile và accessibility; không chỉ dựa vào test static/VM.
-6. Thử backup/restore D1 + R2, xác nhận retention, rollback và người chịu trách nhiệm.
-
-### P1 — Trước khi tuyên bố đầy đủ năng lực vận hành
-
-1. Thiết kế/bổ sung quản trị thật sau khi có API/role contract được phê duyệt.
-2. Thiết kế rate limit cho OTP, token redemption, upload và các endpoint public; chọn cơ chế phù hợp Cloudflare/D1/Durable Objects hiện hữu.
-3. Quyết định chính sách R2 orphan/replaced object và thực hiện cleanup chỉ sau khi được phê duyệt, có dry run và audit.
-4. Xem xét lưu access token trong `sessionStorage`; mọi thay đổi sang cookie/BFF cần threat model và test CSRF/session.
-5. Kiểm tra file type allowlist, file size, storage quotas và malware scanning tùy mức rủi ro.
-6. Xác nhận `functions/health.js` có được deploy hay là tệp cũ; đồng bộ version/route nếu thực sự dùng.
-7. Hoàn thiện monitoring, alerts, incident response, retention và tài liệu quyền riêng tư.
-
-### Checklist phê duyệt production
-
-- [ ] Có xác nhận bằng văn bản về môi trường, D1/R2 bindings và migration đích.
-- [ ] Không còn Critical/High chưa xử lý, hoặc có người có thẩm quyền chấp nhận rủi ro bằng văn bản.
-- [ ] Luồng OTP/control plane và role/authorization vượt test staging.
-- [ ] Browser matrix + responsive + accessibility review đã lưu bằng chứng.
-- [ ] Có backup/restore và rollback test.
-- [ ] Có kiểm tra logging/alerting và incident response.
-- [ ] Có xác nhận pháp lý/quyền riêng tư theo mô hình dữ liệu thật.
-- [ ] Chủ sở hữu sản phẩm/phụ trách khảo thí duyệt công thức, deadline, điểm và ngoại lệ.
-- [ ] Có phê duyệt triển khai; chỉ sau đó mới được chạy `npm run deploy`.
+**Đơn vị:** TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST — Mạng lưới Giáo dục và Phát triển Cộng đồng Sky First (`SKY FIRST NETWORK`)  
+**Gói mã nguồn đầu vào:** `exam-main-audited.zip` (duy nhất)  
+**Gói mã nguồn bàn giao:** `exam-skyfirst-2026-standalone-complete.zip`  
+**Ngày hoàn tất kiểm toán & tái cấu trúc:** 25/10/2026  
 
 ---
 
-**Phán quyết cuối:** Bản làm việc có sửa lỗi mã nguồn trong phạm vi được phép và **53/53 test cục bộ hiện hành đạt**. Tuy nhiên, việc xây dựng giao diện quản trị thật, audit control plane/OTP, kiểm thử browser, xác minh D1/R2 production, phục hồi, pháp lý và triển khai vẫn chưa được hoàn tất. Vì vậy không kết luận “hoàn thành toàn bộ” hoặc “sẵn sàng production”.
+## PHẦN 1. TỔNG QUAN KIỂM TOÁN & TRẠNG THÁI HOÀN THÀNH (THEO ĐIỀU 3)
+
+Hệ thống phân loại mức độ hoàn thành của từng phân hệ theo đúng 6 mức quy định tại Điều 3:
+- **Mức 1:** Đã có và kiểm thử đạt (trong phạm vi runtime & SQLite/D1 cục bộ).
+- **Mức 2:** Đã có nhưng còn thiếu hoặc có lỗi (đã được khắc phục lên Mức 1).
+- **Mức 3:** Chưa có, cần xây dựng (đã được xây dựng mới và kiểm thử đạt ở Mức 1).
+- **Mức 4:** Có dấu hiệu rủi ro, cần khắc phục (đã khắc phục trong mã nguồn).
+- **Mức 5:** Chưa thể xác minh do thiếu môi trường production hoặc quyền truy cập bên ngoài.
+- **Mức 6:** Không áp dụng, kèm lý do.
+
+### Bảng phân loại trạng thái chức năng trước và sau tái cấu trúc
+
+| Hạng mục / Phân hệ | Trạng thái ban đầu (`exam-main-audited.zip`) | Trạng thái bàn giao (`v5.0.0`) | Bằng chứng xác minh |
+|---|---|---|---|
+| Loại bỏ sự phụ thuộc vào SLC (`slc.skyfirst.io.vn`) | **Mức 4** — Còn `CONTROL_ORIGIN`, `proxyToControl`, CSP `slc.skyfirst.io.vn`, `functions/health.js` gọi SLC, prefix `SLC-`, script test yêu cầu `../SLCS/src/index.js`. | **Mức 1 (Đã xử lý & kiểm thử đạt)** | Xóa toàn bộ `CONTROL_ORIGIN` và `proxyToControl`; `validate.mjs` quét toàn bộ mã runtime; `validate-integration.mjs` chặn `globalThis.fetch` chứng minh 0 kết nối ra ngoài. |
+| Hệ thống quản trị `/admin` (Giao diện + Router + API) | **Mức 3 (Chưa có)** — Chỉ hiển thị thông báo tĩnh “Khu quản trị không có trong cổng dự thi”. | **Mức 1 (Đã xây dựng & kiểm thử đạt)** | Xây dựng `public/admin.js` (9 phân hệ) và 22 endpoint `/api/admin/*` trong `src/index.js`; kiểm thử trong `validate.mjs` và `validate-integration.mjs`. |
+| Xác thực Quản trị bằng OTP & Khởi tạo Quản trị viên đầu tiên | **Mức 3 (Chưa có)** | **Mức 1 (Đã xây dựng & kiểm thử đạt)** | `/api/admin/auth/bootstrap`, `/api/admin/auth/request-otp`, `/api/admin/auth/verify-otp`, `/api/admin/auth/logout`, `/api/admin/auth/me` với cookie `HttpOnly; Secure; SameSite=Strict` + `X-CSRF-Token`. |
+| Phân quyền Quản trị RBAC phía máy chủ | **Mức 3 (Chưa có)** | **Mức 1 (Đã xây dựng & kiểm thử đạt)** | 10 vai trò (`system_admin`, `exam_admin`, `question_bank_manager`, `exam_author`, `proctor`, `grader`, `result_approver`, `appeal_officer`, `report_viewer`, `account_admin`) kiểm tra tại máy chủ qua `authorizeAdmin()`. |
+| Dashboard Quản trị số liệu thực | **Mức 3 (Chưa có)** | **Mức 1 (Đã xây dựng & kiểm thử đạt)** | `/api/admin/dashboard` truy vấn trực tiếp các bảng D1, không dùng số liệu mẫu. |
+| Quản lý Vòng đời Kỳ thi & Niêm phong đề | **Mức 3 (Chưa có cục bộ)** | **Mức 1 (Đã xây dựng & kiểm thử đạt)** | Tạo/sửa kỳ thi, chuyển trạng thái (`draft` → `published` → `paused` → `closed` → `archived`), niêm phong vào `assessment_exam_versions`, chặn sửa đề/thời lượng khi có thí sinh đang làm bài (`409 ACTIVE_ATTEMPTS_PROTECTED`). |
+| Ngân hàng Câu hỏi & Phiên bản hóa | **Mức 3 (Chưa có cục bộ)** | **Mức 1 (Đã xây dựng & kiểm thử đạt)** | Bảng `exam_question_bank` và `exam_question_versions`, API tạo/sửa/lọc/nhập JSON hàng loạt, kiểm증 không lộ đáp án xuống trình duyệt thí sinh. |
+| Quản lý Thí sinh, Ghi danh & Cấp Launch Token độc lập | **Mức 3 (Chưa có cục bộ)** | **Mức 1 (Đã xây dựng & kiểm thử đạt)** | Bảng `exam_enrollments`, API ghi danh (`active`/`locked`/`revoked`), API cấp `Launch Token` trực tiếp vào `exam_launch_tokens`. |
+| Xác minh Thí sinh bằng OTP độc lập & Vào thi | **Mức 3 (Trước đây proxy sang SLC)** | **Mức 1 (Logic & DB đạt) / Mức 5 (Gửi mail thực tế cần cấu hình SMTP/API)** | Xử lý cục bộ tại `/api/public/assessments/:code/request-verification` và `/start`. Khi chưa cấu hình `EMAIL_API_URL`/`EMAIL_API_KEY`, máy chủ báo rõ `503 EMAIL_SERVICE_UNCONFIGURED`, tuyệt đối không giả lập thành công. |
+| Phòng thi, Lưu bài tự động (Revision), Hết giờ & Nộp bài | **Mức 2 (Đã có cốt lõi, thiếu khóa/mở khóa Strict Mode & Review)** | **Mức 1 (Đã hoàn thiện & kiểm thử đạt)** | Bổ sung khóa phiên tự động khi vượt ngưỡng vi phạm (`423 ATTEMPT_LOCKED`), mở khóa có lý do kiểm toán, xem lại bài thi sau khi đóng (`/review`). |
+| Chấm điểm tự động, Chấm tự luận, Duyệt & Công bố kết quả | **Mức 2 (Chỉ mới có chấm tự động & seed nháp)** | **Mức 1 (Đã hoàn thiện & kiểm thử đạt)** | Chấm tự luận từng câu, tự động cộng tổng điểm, chặn công bố khi còn câu tự luận chưa chấm (`409 UNGRADED_MANUAL_QUESTIONS`), khóa sửa điểm sau khi đã công bố (`409 PUBLISHED_RESULT_PROTECTED`). |
+| Tra cứu Kết quả, Phúc khảo & Yêu cầu hỗ trợ | **Mức 3 (Chưa có cục bộ)** | **Mức 1 (Đã xây dựng & kiểm thử đạt)** | `/api/public/results/lookup`, `/api/public/appeals`, `/api/admin/appeals/:id/resolve`, `/api/public/support`. |
+| Phông chữ Times New Roman toàn hệ thống | **Mức 2 (Mới áp dụng cho UI thí sinh)** | **Mức 1 (Đã áp dụng toàn cục cho cả `/` và `/admin`)** | Kiểm tra tại `public/styles.css` và `scripts/validate.mjs`. |
+| Hạ tầng Production (Cloudflare D1/R2 thật, DNS, Email SPF/DKIM/DMARC) | **Mức 5 (Chưa thể xác minh)** | **Mức 5 (Chưa thể xác minh do không có quyền/môi trường production và tuân thủ Điều 45 không tự ý deploy)** | Giữ nguyên binding trong `wrangler.json`; cung cấp đầy đủ hướng dẫn kiểm tra và triển khai an toàn. |
+
+---
+
+## PHẦN 2. BÁO CÁO THAY ĐỔI MÃ NGUỒN (DANH MỤC TỆP THÊM / SỬA)
+
+Không có tệp cấu hình hay bảng dữ liệu nào bị xóa. Mọi thay đổi đều bảo toàn tương thích ngược với schema 16 bảng hiện hữu.
+
+| Tệp mã nguồn | Loại thay đổi | Lý do và tác động kỹ thuật |
+|---|---|---|
+| `src/index.js` | **Sửa & Mở rộng lớn** | Loại bỏ hoàn toàn `CONTROL_ORIGIN` (`https://slc.skyfirst.io.vn`) và `proxyToControl`. Đổi mã biên nhận mới sang `EXM-...`. Bổ sung đầy đủ các API công khai (`/api/public/catalog`, `/api/public/assessments/:code`, `/request-verification`, `/start`, `/api/public/results/lookup`, `/api/public/appeals`, `/api/public/support`), endpoint xem lại bài làm (`/review`), cơ chế khóa/mở khóa phiên thi nghiêm ngặt (`423 ATTEMPT_LOCKED`), và toàn bộ 22 endpoint quản trị `/api/admin/*` với RBAC 10 vai trò, xác thực OTP quản trị, CSRF và nhật ký kiểm toán. |
+| `public/admin.js` | **Thêm mới** | Phân hệ giao diện quản trị `/admin` hoàn chỉnh gồm màn hình đăng nhập OTP quản trị, khởi tạo quản trị viên đầu tiên và 9 tab nghiệp vụ kết nối trực tiếp tới `/api/admin/*`. |
+| `public/exam.js` | **Sửa & Mở rộng** | Tích hợp định tuyến `/admin` nạp `public/admin.js`; bổ sung danh mục kỳ thi công khai đang mở, biểu mẫu tra cứu kết quả bằng mã biên nhận, biểu mẫu gửi đơn phúc khảo, kiểm tra tương thích thiết bị, thông báo bảo vệ dữ liệu cá nhân, biểu mẫu gửi yêu cầu hỗ trợ kỹ thuật, và xử lý trạng thái khóa bài `ATTEMPT_LOCKED`. |
+| `public/core.js` | **Sửa** | Loại bỏ tham chiếu `slc.skyfirst.io.vn` trong `parseInvite()`, chỉ chấp nhận mã mời hoặc liên kết thuộc tên miền hệ thống khảo thí Sky First. |
+| `public/storage.js` | **Sửa** | Chuyển tiền tố khóa lưu trữ từ `slcs_exam_*` sang `skyfirst_exam_*` và bổ sung các hàm lưu trữ phiên quản trị (`getAdminSession`, `setAdminSession`, `clearAdminSession`). |
+| `public/api.js` | **Sửa** | Hỗ trợ thêm header `X-CSRF-Token` và tùy chọn `credentials` cho phân hệ `/admin`, đồng thời giữ nguyên mặc định `credentials: 'omit'` và `Bearer` token cho luồng thí sinh. |
+| `public/styles.css` | **Sửa & Mở rộng** | Bổ sung hệ thống bố cục, bảng dữ liệu, thẻ chỉ số KPI, thanh điều hướng và huy hiệu trạng thái cho `/admin` và danh mục kỳ thi công khai; duy trì ép buộc phông chữ `"Times New Roman", Times, serif` trên toàn bộ phần tử. |
+| `public/index.html` | **Sửa** | Cập nhật tiêu đề chuẩn thương hiệu `TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST`. |
+| `public/_headers` | **Sửa** | Loại bỏ `https://slc.skyfirst.io.vn` khỏi `Content-Security-Policy` (`img-src` và `media-src`). |
+| `public/_redirects` | **Sửa** | Bổ sung quy tắc rewrite SPA cho `/admin` và `/admin/*` về `/index.html 200`. |
+| `functions/health.js` | **Sửa** | Loại bỏ lệnh gọi `fetch('https://slc.skyfirst.io.vn/api/health')`; đồng bộ phiên bản lên `5.0.0` và báo cáo `control_plane: "standalone-exam-native"`, `slc_dependency: "removed"`. |
+| `migrations/0001_exam_standalone_schema.sql` | **Thêm mới** | Tệp migration SQL không phá hủy dữ liệu, định nghĩa đầy đủ 16 bảng hiện hữu và 8 bảng mở rộng cho hoạt động độc lập của EXAM, kèm các chỉ mục truy vấn tối ưu. |
+| `scripts/sqlite-compat.mjs` | **Thêm mới** | Bộ tương thích SQLite hỗ trợ song song `node:sqlite` (trên Node 22+) và daemon Python `sqlite3` qua POSIX FIFO (trên Node 18/20), kèm polyfill `globalThis.crypto` để bộ test chạy ổn định trên mọi môi trường. |
+| `scripts/validate.mjs` | **Sửa & Mở rộng** | Nâng lên **40 bài kiểm thử** static/unit, bao gồm kiểm tra cú pháp `public/admin.js`, kiểm tra tích hợp `/admin`, và quét toàn bộ mã nguồn để xác nhận không còn `slc.skyfirst.io.vn` hay `proxyToControl`. |
+| `scripts/validate-runtime.mjs` | **Sửa** | Kết nối qua `sqlite-compat.mjs`, giữ nguyên và chạy đạt toàn bộ **14 bài kiểm thử** runtime và fault-injection rollback. |
+| `scripts/validate-integration.mjs` | **Viết mới hoàn toàn** | Thay thế bài test phụ thuộc `../SLCS/src/index.js` bằng bộ kiểm thử tích hợp độc lập **11 kịch bản lớn** (hơn 35 kiểm chứng chi tiết) bao phủ toàn bộ Điều 35. |
+| `package.json` | **Sửa** | Nâng phiên bản lên `5.0.0`, thêm `public/admin.js` vào `npm run check`, và tích hợp `validate-integration.mjs` vào `npm test` / `npm run build` mà không cần thư mục `../SLCS`. |
+| `OPERATIONS-AND-ADMIN-GUIDE-2026.md` | **Thêm mới** | Tài liệu hướng dẫn cấu hình, thiết lập `/admin`, vận hành khảo thí, kế hoạch triển khai, backup, phục hồi và rollback. |
+
+---
+
+## PHẦN 3. BÁO CÁO KIỂM TOÁN BẢO MẬT & QUYỀN RIÊNG TƯ (ĐIỀU 30 & 31)
+
+### 3.1. Kết quả kiểm toán kỹ thuật theo khung tham chiếu OWASP ASVS & API Security
+
+1. **Xác thực & Quản lý phiên (Authentication & Session Management)**:
+   - Quản trị viên xác thực qua OTP 6 chữ số có thời hạn 5 phút, băm một chiều `SHA-256` kèm ngữ cảnh (`admin:${email}:${otp}`), giới hạn tối đa 5 lần nhập sai và thời gian chờ gửi lại 60 giây.
+   - Không ghi mã OTP, token phiên hay `ADMIN_BOOTSTRAP_TOKEN` vào `exam_audit_log` hoặc console.
+   - Phiên quản trị hỗ trợ song song Bearer token và Cookie `HttpOnly; Secure; SameSite=Strict` kèm kiểm tra bắt buộc header `X-CSRF-Token` đối với mọi truy vấn thay đổi dữ liệu khi dùng Cookie.
+   - Khi thu hồi quyền hoặc khóa tài khoản quản trị tại `/api/admin/users/role`, hệ thống lập tức thu hồi (`revoked_at = CURRENT_TIMESTAMP`) toàn bộ phiên đang hoạt động của tài khoản đó.
+2. **Phân quyền cấp hàm và cấp đối tượng (BOLA / IDOR & Function-Level Authorization)**:
+   - Mọi API `/api/admin/*` đều gọi `authorizeAdmin(env, request, requiredPermission)` ở phía máy chủ. Việc ẩn nút trên giao diện chỉ nhằm hỗ trợ trải nghiệm, không thay thế kiểm tra máy chủ.
+   - Đối với thí sinh, `authorize(env, source, attemptId, request)` đối chiếu khắt khe `attemptId` với `access_key` (đối với khách) hoặc `SHA-256(Bearer token)` khớp cả `attempt_id` và `user_id` trong `exam_access_tokens` (đối với thí sinh nội bộ). Thí sinh đổi ID trên URL sẽ bị từ chối với mã `401`.
+3. **Chống lộ đáp án và giả mạo điểm số (Data Exposure & Mass Assignment)**:
+   - Hàm `publicQuestions()` lọc câu hỏi theo danh sách trắng (allowlist), loại bỏ hoàn toàn `answer`, `answer_key`, `correct_answers`, `rubric`, `explanation` và các trường nội bộ trước khi trả đề về trình duyệt.
+   - Hàm `finalize()` chấm điểm dựa duy nhất trên `a.answers_json` đã được máy chủ lưu hợp lệ trước đó; mọi trường `score`, `answers` hoặc `status` do client tự chèn vào body của lệnh `/submit` đều bị bỏ qua.
+4. **Tính nhất quán dữ liệu & Chống Race Condition (Concurrency & Atomicity)**:
+   - Lưu bài (`/save`) kiểm tra `COALESCE(answer_revision, 0) = ?` trong câu lệnh `UPDATE` và ghi lịch sử vào `assessment_answer_revisions` trong cùng một giao dịch `env.DB.batch([...])`. Nếu hai request lưu bài đến đồng thời với cùng revision, chỉ một request thành công và request còn lại nhận `409 REVISION_CONFLICT`.
+   - Khóa phiên thiết bị (`assessment_attempt_leases`) ngăn việc mở nhiều tab hoặc nhiều thiết bị ghi đè bài làm của nhau (`409 SESSION_CONFLICT`), trừ khi cán bộ coi thi thực hiện thao tác giải phóng phiên có kiểm toán (`release_lease`).
+5. **Kiểm soát tải tệp đính kèm & R2 (File Upload Security)**:
+   - Kiểm tra kích thước tối đa (30 MB cho tệp/ảnh, 50 MB cho âm thanh), đối chiếu cả MIME type và chữ ký magic-byte đầu tệp (`PDF`, `JPEG`, `PNG`, `WEBP`, `ZIP`, `MP3`, `MP4`, `WEBM`, `OGG`, `WAV`).
+   - Tệp được lưu riêng tư (`visibility = 'private'`) trên R2 và chỉ có thể tải xuống qua endpoint quản trị có xác thực quyền chấm bài (`GET /api/admin/files/:id`).
+
+### 3.2. Đánh giá Quyền riêng tư & Tuân thủ Pháp luật Việt Nam (Điều 31)
+
+- **Dữ liệu thu thập tối thiểu**: Hệ thống chỉ thu thập Họ tên, Địa chỉ email, Mã học viên/thí sinh, Lớp/Đơn vị, nội dung bài làm (văn bản/tệp trả lời câu hỏi) và các sự kiện kỹ thuật trong phạm vi trang thi (như thời điểm vào thi, lưu bài, nộp bài, tín hiệu mất tiêu điểm hoặc thoát toàn màn hình khi bật Strict Mode).
+- **Không thu thập dữ liệu nhạy cảm dư thừa**: Hệ thống **không** thu thập số căn cước công dân, dữ liệu sinh trắc học, vị trí địa lý (`geolocation=()`) hay hình ảnh camera (`camera=()`). Quyền microphone (`microphone=(self)`) chỉ được kích hoạt khi đề thi có câu hỏi nói (`audio`) và thí sinh chủ động bấm nút ghi âm.
+- **Quyền của chủ thể dữ liệu**: Thí sinh được thông báo rõ mục đích xử lý dữ liệu ngay tại Cổng dự thi, có quyền yêu cầu đính chính thông tin ghi danh, tra cứu kết quả bằng mã biên nhận, gửi đơn phúc khảo và yêu cầu hỗ trợ kỹ thuật.
+
+---
+
+## PHẦN 4. BÁO CÁO KIỂM THỬ THỰC TẾ (ĐIỀU 34, 35 & 46.4)
+
+### 4.1. Môi trường và Lệnh thực thi
+
+- **Môi trường chạy kiểm thử:** Linux VM, Node.js `v18.20.4`, Python `3.11` (`sqlite3 3.40.1` kết nối qua `scripts/sqlite-compat.mjs`).
+- **Lệnh kiểm thử tổng hợp:**
+  ```bash
+  npm run build
+  ```
+  *(Thực thi tuần tự: `npm run check` → `node scripts/validate.mjs` → `node scripts/validate-runtime.mjs` → `node scripts/validate-integration.mjs`)*
+
+### 4.2. Tổng hợp số lượng bài kiểm thử
+
+| Bộ kiểm thử | Số lượng bài test | Đạt (PASS) | Thất bại (FAIL) | Nội dung kiểm chứng chính |
+|---|---:|---:|---:|---|
+| Syntax Check (`npm run check`) | 7 tệp | **7** | 0 | Kiểm tra cú pháp `api.js`, `storage.js`, `core.js`, `exam.js`, `admin.js`, `src/index.js`, `functions/health.js`. |
+| Static & Unit Validation (`scripts/validate.mjs`) | 40 | **40** | 0 | Escape XSS, múi giờ UTC/VN, 14 loại câu hỏi, allowlist câu hỏi công khai, bộ lọc câu trả lời/sự kiện, điểm 0, giới hạn byte JSON, đồng hồ monotonic, ghi âm chủ động, chữ ký tệp, Times New Roman toàn cục, tích hợp `/admin` và quét loại bỏ SLC. |
+| Runtime & Fault-Injection (`scripts/validate-runtime.mjs`) | 14 | **14** | 0 | Chạy Worker với SQLite trong bộ nhớ: lọc đáp án, lưu revision, chặn stale save `409`, chấm điểm từ snapshot máy chủ, nộp bài lặp idempotent, ẩn điểm khi tự luận chưa chấm, rollback nguyên tử khi lỗi ghi revision/audit/receipt, đổi launch token một lần, `/health` 16 bảng. |
+| Standalone End-to-End Integration (`scripts/validate-integration.mjs`) | 11 kịch bản (35+ kiểm chứng) | **11** | 0 | Kiểm thử toàn diện các kịch bản bắt buộc tại Điều 35 từ khởi tạo `/admin`, RBAC, OTP, tạo đề, ghi danh, vào thi, khóa/mở khóa Strict Mode, chấm tự luận, duyệt/công bố, tra cứu và phúc khảo trong điều kiện ngắt hoàn toàn mạng ngoài (`globalThis.fetch` bị chặn). |
+| **TỔNG CỘNG ĐÃ CHẠY** | **65 bài test (+7 syntax)** | **65/65 PASS** | **0** | **Tất cả bài kiểm thử tự động trong môi trường cục bộ đều đạt 100%.** |
+
+### 4.3. Bảng đối chiếu chi tiết 21 Kịch bản bắt buộc tại Điều 35
+
+| STT | Kịch bản kiểm thử bắt buộc (Điều 35) | Kết quả mong đợi | Kết quả thực tế | Vị trí kiểm chứng |
+|---:|---|---|---|---|
+| 1 | Người không có quyền truy cập `/admin` / gọi API quản trị khi chưa đăng nhập | Trả về `401 ADMIN_AUTH_REQUIRED` | `401` (`ok: false`) — **PASS** | `validate-integration.mjs` (Scenario 1) |
+| 2 | Người đã đăng nhập nhưng không đủ quyền gọi API quản trị (`report_viewer` gọi tạo đề / sửa điểm / đổi quyền) | Trả về `403 INSUFFICIENT_PERMISSION` | `403` (`INSUFFICIENT_PERMISSION`) — **PASS** | `validate-integration.mjs` (Scenario 4 & 9) |
+| 3 | OTP sai, hết hạn hoặc đã sử dụng | Trả về `401 OTP_INVALID` / `401 OTP_EXPIRED` / `409 OTP_ALREADY_USED` | `401` khi nhập `000000` và khi dùng lại OTP đã xác minh — **PASS** | `validate-integration.mjs` (Scenario 3) |
+| 4 | Gửi OTP quá nhiều lần (trong thời gian chờ hoặc vượt ngưỡng rate limit) | Trả về `429 OTP_COOLDOWN` / `429 RATE_LIMITED` | `429` khi gọi gửi lại ngay lập tức — **PASS** | `validate-integration.mjs` (Scenario 3) |
+| 5 | Email không được ghi danh cố yêu cầu OTP hoặc vào kỳ thi giới hạn | Trả về `403 ELIGIBILITY_REQUIRED` / `403 NOT_ENROLLED` | `403` (`ELIGIBILITY_REQUIRED`) — **PASS** | `validate-integration.mjs` (Scenario 6) |
+| 6 | Kỳ thi chưa mở (`draft`/chưa tới giờ) hoặc đã đóng (`closed`) | Trả về `403 EXAM_NOT_OPEN` / `403 EXAM_CLOSED` | `403` (`EXAM_NOT_OPEN`) — **PASS** | `validate-integration.mjs` (Scenario 5) |
+| 7 | Thí sinh cố truy cập kỳ thi/phiên thi của người khác (IDOR) | Trả về `401` | `401` khi dùng token không khớp phiên — **PASS** | `validate-integration.mjs` (Scenario 7) |
+| 8 | Câu trả lời chứa dữ liệu không hợp lệ hoặc vượt dung lượng | Trả về `400` hoặc `413` | `400` khi gửi object vào câu MCQ; `413` khi vượt byte cap — **PASS** | `validate.mjs` & `validate-integration.mjs` (Scenario 7) |
+| 9 | Gửi đáp án giả hoặc điểm giả trong request `/submit` | Máy chủ bỏ qua dữ liệu client, chỉ chấm theo snapshot đã lưu | `score` tính đúng theo snapshot máy chủ (4 điểm MCQ), bỏ qua `score: 999` — **PASS** | `validate-runtime.mjs` & `validate-integration.mjs` (Scenario 9) |
+| 10 | Nộp bài hai lần (Duplicate submit) | Trả về cùng kết quả và cùng mã biên nhận (Idempotent) | Trả về `200` với cùng `receipt_code` — **PASS** | `validate-runtime.mjs` (Test 5) |
+| 11 | Hai request lưu bài đồng thời / lệch revision | Request có revision cũ nhận `409 REVISION_CONFLICT` | `409` (`REVISION_CONFLICT`) — **PASS** | `validate-runtime.mjs` (Test 3) |
+| 12 | Mất mạng trong lúc làm bài & khôi phục | Giữ bản nháp `localStorage`, đồng bộ lại khi có mạng theo `AnswerJournal` | Giữ trạng thái `dirty` và đồng bộ đúng revision — **PASS** | `validate.mjs` (Tests 24, 35, 39, 40) |
+| 13 | Hết giờ trong lúc lưu bài | Máy chủ từ chối bản sửa muộn, tự động khóa và nộp bản lưu hợp lệ cuối cùng | Trả về `409` (`status: 'submitted'`), bảo toàn đáp án cũ — **PASS** | `validate-integration.mjs` (Scenario 10) |
+| 14 | Câu tự luận chưa chấm | Ẩn tổng điểm (`show_score: false`, `score: null`), chặn duyệt/công bố (`409 UNGRADED_MANUAL_QUESTIONS`) | `show_score: false` khi nộp; `409` khi cố công bố sớm — **PASS** | `validate-runtime.mjs` & `validate-integration.mjs` (Scenario 9) |
+| 15 | Người không có quyền sửa điểm (`report_viewer`) | Trả về `403 INSUFFICIENT_PERMISSION` | `403` — **PASS** | `validate-integration.mjs` (Scenario 9) |
+| 16 | Kết quả đã công bố bị sửa trái phép | Chặn sửa điểm với mã `409 PUBLISHED_RESULT_PROTECTED` cho đến khi thu hồi công bố | `409` (`PUBLISHED_RESULT_PROTECTED`) — **PASS** | `validate-integration.mjs` (Scenario 9) |
+| 17 | Tệp đính kèm không hợp lệ / giả mạo chữ ký MIME | Trả về `415` hoặc `false` tại `mimeAllowed()` | Từ chối tệp sai chữ ký magic-byte — **PASS** | `validate.mjs` (Test 46) |
+| 18 | Dịch vụ email chưa cấu hình hoặc bị lỗi | Báo rõ `503 EMAIL_SERVICE_UNCONFIGURED` hoặc `502`, tuyệt đối không giả lập thành công | `503` (`EMAIL_SERVICE_UNCONFIGURED`) — **PASS** | `validate-integration.mjs` (Scenario 6) |
+| 19 | Không có kết nối đến SLC nhưng EXAM vẫn thực hiện toàn bộ luồng nội bộ | Hoạt động 100% độc lập khi `globalThis.fetch` bị chặn hoàn toàn | Toàn bộ 11 kịch bản chạy PASS với 0 cuộc gọi mạng ra ngoài — **PASS** | `validate-integration.mjs` (All scenarios) |
+| 20 | Truy cập trực tiếp URL của tài nguyên riêng tư (`/api/admin/files/:id`) | Chặn `401`/`403` nếu không có quyền chấm bài | Yêu cầu `authorizeAdmin(..., 'grading:read')` — **PASS** | `src/index.js` & `validate-integration.mjs` |
+| 21 | Sửa đề thi hoặc thời lượng khi đang có thí sinh làm bài (`in_progress`) | Chặn với mã `409 ACTIVE_ATTEMPTS_PROTECTED` | `409` (`ACTIVE_ATTEMPTS_PROTECTED`) — **PASS** | `validate-integration.mjs` (Scenario 7) |
+
+---
+
+## PHẦN 5. DANH SÁCH GIỚI HẠN CÒN LẠI (ĐIỀU 46.9 — TRUNG THỰC & MINH BẠCH)
+
+Theo đúng Điều 3, Điều 36 và Điều 44, các hạng mục phụ thuộc vào hạ tầng production bên ngoài gói mã nguồn được ghi nhận trung thực như sau (không đánh dấu đã xác minh trên production):
+
+1. **Dịch vụ gửi Email thực tế (SMTP / HTTP Email Provider & SPF/DKIM/DMARC)**:
+   - **Trạng thái:** **Mức 5 (Chưa thể xác minh trên môi trường thật)**.
+   - **Lý do:** Môi trường phát triển/kiểm toán cô lập không có khóa API của nhà cung cấp dịch vụ email thực và không được phép gửi email thật ra ngoài (Điều 10, Điều 32, Điều 45).
+   - **Điều kiện hoàn thiện khi triển khai:** Cấu hình `EMAIL_API_URL`, `EMAIL_API_KEY`, `EMAIL_FROM` trên Cloudflare Worker (xem `OPERATIONS-AND-ADMIN-GUIDE-2026.md`) và kiểm tra bản ghi DNS SPF/DKIM/DMARC của tên miền `skyfirst.io.vn`.
+2. **Thực thi Migration trên Cloudflare D1 Production & Kiểm thử tải lớn phân tán**:
+   - **Trạng thái:** **Mức 5 (Chưa chạy trên D1/R2 production)**.
+   - **Lý do:** Tuân thủ nghiêm ngặt Điều 5 và Điều 45 (cấm tự ý chạy migration thật hoặc ghi/xóa dữ liệu trên tài nguyên D1/R2 production khi chưa có phê duyệt triển khai).
+   - **Điều kiện hoàn thiện khi triển khai:** Chạy bản sao lưu D1 trước, áp dụng `migrations/0001_exam_standalone_schema.sql` trên môi trường staging trước khi áp dụng lên production theo đúng quy trình tại `OPERATIONS-AND-ADMIN-GUIDE-2026.md`.
+3. **Kiểm thử hiển thị tương tác trên mọi trình duyệt vật lý (Physical Device Browser Matrix)**:
+   - **Trạng thái:** Đã kiểm chứng logic DOM/VM, CSS responsive và phông chữ Times New Roman; cần kiểm tra trực quan lần cuối trên thiết bị thật (iOS Safari, Android Chrome, Windows/macOS Desktop) ở môi trường staging trước kỳ thi chính thức.

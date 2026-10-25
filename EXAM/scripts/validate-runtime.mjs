@@ -1,7 +1,7 @@
 /** Standalone EXAM runtime integration tests using an ephemeral SQLite database. No SLCS source, network, or production binding is used. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {DatabaseSync} from 'node:sqlite';
+import {DatabaseSync} from './sqlite-compat.mjs';
 import examWorker from '../src/index.js';
 
 const db=new DatabaseSync(':memory:');
