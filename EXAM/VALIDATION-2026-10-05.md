@@ -1,3 +1,5 @@
+> **Lưu ý về thời điểm:** Đây là báo cáo lịch sử ngày 05/10/2026, giữ nguyên để truy vết kết quả tại thời điểm đó. Báo cáo kiểm toán mới và kết quả test hiện hành nằm trong `AUDIT-REPORT-2026-10-25.md`; vui lòng chạy `npm run build` để xác nhận trạng thái hiện tại. Không cộng gộp các con số lịch sử vào kết quả hiện hành.
+
 # Báo cáo kiểm tra bản Professional — 05/10/2026
 
 ## Thay đổi chính
