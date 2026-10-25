@@ -1,6 +1,6 @@
-import {apiRequest} from './api.js?build=20261025-audit-fix-1';
-import {getSession,setSession,clearSession,saveLocal,loadLocal,clearLocal,storageRestricted,acquireLease,renewLease,releaseLease} from './storage.js?build=20261025-audit-fix-1';
-import {escapeHtml as esc,timeMs,formatClock,answerStatus,optionsFor,normalizeExam,cleanAnswers,eventUnion,parseInvite,AnswerJournal} from './core.js?build=20261025-audit-fix-1';
+import {apiRequest} from './api.js?build=20261025-v5-final';
+import {getSession,setSession,clearSession,saveLocal,loadLocal,clearLocal,storageRestricted,acquireLease,renewLease,releaseLease} from './storage.js?build=20261025-v5-final';
+import {escapeHtml as esc,timeMs,formatClock,answerStatus,optionsFor,normalizeExam,cleanAnswers,eventUnion,parseInvite,AnswerJournal} from './core.js?build=20261025-v5-final';
 const app=document.querySelector('#app');
 let {token,attempt,mode,invite,candidate,sessionId}=getSession();
 let exam=null,answers={},events=[],current=0,marked=new Set(),filter='all',remaining=null,deadlineMs=null,offset=0,revision=0;
@@ -140,7 +140,7 @@ async function guestGate(code){
 async function boot(){try{
  const u=new URL(location.href),launch=u.searchParams.get('launch');
  if(/^\/admin(?:\/|$)/.test(u.pathname)){
-  const {bootAdmin}=await import('./admin.js?build=20261025-audit-fix-1');
+  const {bootAdmin}=await import('./admin.js?build=20261025-v5-final');
   return await bootAdmin(app);
  }
  let inviteUrl='';if(u.pathname.startsWith('/join/'))inviteUrl=decodeURIComponent(u.pathname.split('/')[2]||'');else inviteUrl=u.searchParams.get('invite')||'';

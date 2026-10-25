@@ -4,9 +4,9 @@
 // Zero mock numbers; server-verified RBAC; OTP login + CSRF protection.
 // =============================================================================
 
-import { apiRequest } from './api.js?build=20261025-audit-fix-1';
-import { getAdminSession, setAdminSession, clearAdminSession } from './storage.js?build=20261025-audit-fix-1';
-import { escapeHtml as esc, timeMs } from './core.js?build=20261025-audit-fix-1';
+import { apiRequest } from './api.js?build=20261025-v5-final';
+import { getAdminSession, setAdminSession, clearAdminSession } from './storage.js?build=20261025-v5-final';
+import { escapeHtml as esc, timeMs } from './core.js?build=20261025-v5-final';
 
 let adminState = {
   tab: 'dashboard',
@@ -129,14 +129,14 @@ function renderAdminLogin(appEl) {
           <a class="btn" href="/">← Về cổng thí sinh</a>
         </div>
       </form>
-      <details class="rules" style="margin-top:24px">
-        <summary>Khởi tạo Quản trị viên đầu tiên (Dành cho Quản trị hệ thống khi mới cài đặt)</summary>
+      <details class="rules" open style="margin-top:24px">
+        <summary>Đăng nhập / Khởi tạo Quản trị viên Hệ thống (Bootstrap Token — Vào thẳng /admin không cần chờ Email OTP)</summary>
         <form id="adminBootstrapForm" style="padding-bottom:16px">
-          <p class="footnote">Chức năng này chỉ hoạt động khi máy chủ đã cấu hình biến môi trường <code>ADMIN_BOOTSTRAP_TOKEN</code>.</p>
+          <p class="footnote">Nhập <code>ADMIN_BOOTSTRAP_TOKEN</code> đã cấu hình trên Cloudflare (hoặc mã mặc định lần đầu <code>SKYFIRST-2026-ADMIN</code> nếu chưa đặt biến môi trường) để kích hoạt và đăng nhập thẳng vào Bảng điều khiển <code>/admin</code>.</p>
           <div class="two">
             <div class="field">
               <label for="bootToken">Mã khởi tạo hệ thống (Bootstrap Token)</label>
-              <input id="bootToken" name="bootstrap_token" type="password" required placeholder="Nhập ADMIN_BOOTSTRAP_TOKEN">
+              <input id="bootToken" name="bootstrap_token" type="password" required placeholder="Nhập ADMIN_BOOTSTRAP_TOKEN hoặc SKYFIRST-2026-ADMIN">
             </div>
             <div class="field">
               <label for="bootEmail">Email quản trị viên cần cấp quyền</label>

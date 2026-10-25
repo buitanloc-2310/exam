@@ -848,12 +848,12 @@ try {
 // 15. Direct Worker /admin HTML routing on exam.skyfirst.io.vn and www.exam.skyfirst.io.vn (CSP-compliant, zero inline scripts)
 {
   for (const url of ['https://exam.skyfirst.io.vn/admin', 'https://www.exam.skyfirst.io.vn/admin', 'https://exam.skyfirst.io.vn/admin/exams']) {
-    const res = await worker.fetch(new Request(url, { method: 'GET' }), env);
+    const res = await examWorker.fetch(new Request(url, { method: 'GET' }), baseEnv);
     assert.equal(res.status, 200, `Expected 200 for ${url}`);
     assert.match(res.headers.get('content-security-policy') || '', /script-src 'self'/);
     assert.match(res.headers.get('cache-control') || '', /no-store/);
     const html = await res.text();
-    assert.match(html, /<script type="module" src="\/admin\.js\?build=20261025-audit-fix-1"><\/script>/);
+    assert.match(html, /<script type="module" src="\/admin\.js\?build=20261025-v5-final"><\/script>/);
     assert.doesNotMatch(html, /Khu quản trị không có trong cổng dự thi/);
   }
   console.log('PASS Scenario 15: Worker directly serves CSP-compliant /admin HTML on exam.skyfirst.io.vn/admin and www.exam.skyfirst.io.vn/admin');
