@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Quản trị Khảo thí (/admin) | TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST</title>
+  <link rel="icon" href="/sky-first-logo.webp">
+  <link rel="stylesheet" href="/styles.css?build=20261025-audit-fix-1">
+</head>
+<body>
+  <a class="skip-link" href="#adminMain">Đến bảng điều khiển quản trị</a>
+  <div id="app" class="gate">
+    <section class="gate-card">
+      <div class="ey">TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST</div>
+      <h1>Đang mở Phân hệ Quản trị Khảo thí (/admin)…</h1>
+      <p>Vui lòng chờ giây lát trong khi hệ thống kiểm tra phiên quản trị.</p>
+    </section>
+  </div>
+  <noscript>
+    <main class="gate">
+      <section class="gate-card">
+        <h1>Cần bật JavaScript</h1>
+        <p>Vui lòng bật JavaScript trong trình duyệt để sử dụng Phân hệ Quản trị Khảo thí (/admin).</p>
+      </section>
+    </main>
+  </noscript>
+  <script type="module">
+    import { bootAdmin } from '/admin.js?build=20261025-audit-fix-1';
+    bootAdmin(document.querySelector('#app'));
+  </script>
+</body>
+</html>

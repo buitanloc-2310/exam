@@ -2733,7 +2733,18 @@ export default {
     try {
       const apiResponse = await api(request, env);
       if (apiResponse) return withSecurity(apiResponse);
-      const response = await env.ASSETS.fetch(request);
+      let response = await env.ASSETS.fetch(request);
+      if (response.status === 404 && ['GET', 'HEAD'].includes(request.method.toUpperCase())) {
+        const u = new URL(request.url);
+        if (/^\/admin(?:\/|$)/.test(u.pathname)) {
+          const adminReq = new Request(new URL('/admin/index.html', u.origin), request);
+          const adminRes = await env.ASSETS.fetch(adminReq);
+          if (adminRes.status === 200) response = adminRes;
+          else response = await env.ASSETS.fetch(new Request(new URL('/index.html', u.origin), request));
+        } else if (/^\/(?:exam|join)(?:\/|$)/.test(u.pathname)) {
+          response = await env.ASSETS.fetch(new Request(new URL('/index.html', u.origin), request));
+        }
+      }
       return withSecurity(response);
     } catch (error) {
       const status = Number(error?.status) || 500;
