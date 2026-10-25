@@ -1,33 +1,32 @@
 <!doctype html>
 <html lang="vi">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="robots" content="noindex,nofollow">
-  <title>Quản trị Khảo thí (/admin) | TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST</title>
-  <link rel="icon" href="/sky-first-logo.webp">
-  <link rel="stylesheet" href="/styles.css?build=20261025-audit-fix-1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0d2a4a" />
+  <meta name="color-scheme" content="light" />
+  <meta name="description" content="SKY FIRST EXAM 2026 — Phân hệ Quản trị Khảo thí Độc lập (/admin) với RBAC 10 vai trò, Ngân hàng câu hỏi, Tổ chức kỳ thi, Chấm thi, Phúc khảo và Nhật ký Kiểm toán." />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Quản trị Khảo thí (/admin) — SKY FIRST EXAM 2026</title>
+  <link rel="icon" type="image/webp" href="/sky-first-logo.webp" />
+  <link rel="apple-touch-icon" href="/sky-first-logo.webp" />
+  <link rel="stylesheet" href="/styles.css?build=20261025-audit-fix-1" />
 </head>
 <body>
-  <a class="skip-link" href="#adminMain">Đến bảng điều khiển quản trị</a>
-  <div id="app" class="gate">
-    <section class="gate-card">
-      <div class="ey">TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST</div>
-      <h1>Đang mở Phân hệ Quản trị Khảo thí (/admin)…</h1>
-      <p>Vui lòng chờ giây lát trong khi hệ thống kiểm tra phiên quản trị.</p>
-    </section>
-  </div>
   <noscript>
-    <main class="gate">
-      <section class="gate-card">
-        <h1>Cần bật JavaScript</h1>
-        <p>Vui lòng bật JavaScript trong trình duyệt để sử dụng Phân hệ Quản trị Khảo thí (/admin).</p>
-      </section>
-    </main>
+    <div style="padding:18px;font-family:'Times New Roman',Times,serif;background:#fff4d6;color:#5f3dc4;border-bottom:1px solid #e5dbff">
+      Phân hệ Quản trị Khảo thí SKY FIRST EXAM (/admin) yêu cầu bật JavaScript để xác thực phiên quản trị và tải dữ liệu điều hành.
+    </div>
   </noscript>
-  <script type="module">
-    import { bootAdmin } from '/admin.js?build=20261025-audit-fix-1';
-    bootAdmin(document.querySelector('#app'));
-  </script>
+  <div id="app" aria-live="polite">
+    <div class="shell" style="padding-top:36px">
+      <div class="card">
+        <div class="badge">SKY FIRST EXAM 2026 • QUẢN TRỊ KHẢO THÍ ĐỘC LẬP</div>
+        <h1 class="h1" style="margin-top:10px">Đang khởi động Phân hệ Quản trị Khảo thí (/admin)…</h1>
+        <p class="sub">Hệ thống đang kiểm tra phiên làm việc quản trị viên và kết nối máy chủ khảo thí.</p>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/admin.js?build=20261025-audit-fix-1"></script>
 </body>
 </html>

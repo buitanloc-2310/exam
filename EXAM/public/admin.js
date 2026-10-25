@@ -59,6 +59,7 @@ function showAdminToast(msg, isBad = false) {
 }
 
 export async function bootAdmin(appEl) {
+  if (typeof window !== 'undefined') window.__SKYFIRST_ADMIN_BOOTED__ = true;
   const saved = getAdminSession();
   adminState.token = saved.token || '';
   adminState.csrf = saved.csrf || '';
@@ -223,6 +224,16 @@ function renderAdminLogin(appEl) {
         method: 'POST',
         body: JSON.stringify({ ...fd, roles: ['system_admin'] })
       });
+      if (r && r.admin_token && r.user) {
+        adminState.token = r.admin_token;
+        adminState.csrf = r.csrf_token || '';
+        adminState.user = r.user;
+        setAdminSession(adminState.token, adminState.csrf, adminState.user);
+        showAdminToast(`Đã khởi tạo và đăng nhập Quản trị viên hệ thống (${r.user.email})!`);
+        await loadTabData('dashboard');
+        renderAdminShell(appEl);
+        return;
+      }
       setStatus(`Đã cấp quyền system_admin cho ${r.email}. Bây giờ bạn có thể yêu cầu mã OTP để đăng nhập.`, false);
       appEl.querySelector('#adminEmail').value = r.email;
     } catch (err) {
@@ -1512,4 +1523,14 @@ function bindAdminEvents(appEl) {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
+}
+
+// Auto-boot when loaded directly via <script type="module" src="/admin.js"> on /admin routes
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  const p = String(window.location?.pathname || '');
+  if (/^\/admin(?:\/|\.html|$)/.test(p) && !window.__SKYFIRST_ADMIN_BOOTED__) {
+    window.__SKYFIRST_ADMIN_BOOTED__ = true;
+    const appEl = document.querySelector('#app');
+    if (appEl) bootAdmin(appEl);
+  }
 }

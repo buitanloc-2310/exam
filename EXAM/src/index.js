@@ -1467,17 +1467,18 @@ async function adminBootstrap(env, request) {
     return bad('Chức năng khởi tạo quản trị viên đầu tiên đang tắt (chưa cấu hình ADMIN_BOOTSTRAP_TOKEN).', 403, { code: 'BOOTSTRAP_DISABLED' });
   }
   await checkRateLimit(env, 'admin_bootstrap_attempt', 5, 10 * 60 * 1000);
-  const existingAdmins = (await env.DB.prepare(`SELECT id, role, roles_json FROM users WHERE status='active'`).all())?.results || [];
-  if (existingAdmins.some(u => parseUserRoles(u).includes('system_admin'))) {
-    await recordAudit(env, { eventType: 'admin.bootstrap.locked', detail: { reason: 'system_admin_already_exists' } });
+  const body = await readJsonBody(request, 16_384);
+  const email = str(body.email).toLowerCase();
+  const existingAdmins = (await env.DB.prepare(`SELECT id, email, role, roles_json FROM users WHERE status='active'`).all())?.results || [];
+  const activeSysAdmins = existingAdmins.filter(u => parseUserRoles(u).includes('system_admin'));
+  if (activeSysAdmins.length > 0 && !activeSysAdmins.some(u => str(u.email).toLowerCase() === email)) {
+    await recordAudit(env, { eventType: 'admin.bootstrap.locked', detail: { reason: 'system_admin_already_exists', attempted_email: email } });
     return bad('Hệ thống đã có Quản trị viên hệ thống (system_admin) đang hoạt động. Chức năng khởi tạo lần đầu đã tự động khóa để bảo mật.', 409, { code: 'BOOTSTRAP_ALREADY_COMPLETED' });
   }
-  const body = await readJsonBody(request, 16_384);
   if (!timingSafeStringEqual(str(body.bootstrap_token), setupToken)) {
     await recordAudit(env, { eventType: 'admin.bootstrap.failed', detail: { reason: 'invalid_token' } });
     return bad('Mã khởi tạo hệ thống không chính xác.', 403, { code: 'INVALID_BOOTSTRAP_TOKEN' });
   }
-  const email = str(body.email).toLowerCase();
   const fullName = str(body.full_name || 'Quản trị viên Hệ thống Sky First').slice(0, 160);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return bad('Địa chỉ email quản trị viên không hợp lệ.', 400);
@@ -1494,8 +1495,30 @@ async function adminBootstrap(env, request) {
   } else {
     await env.DB.prepare(`INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json) VALUES(?,?,?,?,?,?,?)`).bind(userId, fullName, `ADM-${userId.slice(-4).toUpperCase()}`, email, 'active', roles[0], JSON.stringify(roles)).run();
   }
+  const sessionToken = randomHex(32);
+  const sessionHash = await sha256Text(sessionToken);
+  const csrfToken = randomHex(24);
+  const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString();
+  await env.DB.prepare(
+    `INSERT INTO exam_admin_sessions(token_hash,user_id,email,roles_json,csrf_token,expires_at,created_at,last_seen_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
+  ).bind(sessionHash, userId, email, JSON.stringify(roles), csrfToken, expiresAt).run();
   await recordAudit(env, { actorUserId: userId, eventType: 'admin.bootstrap.provisioned', detail: { email, roles } });
-  return ok({ user_id: userId, email, full_name: fullName, roles });
+  return ok(
+    {
+      user_id: userId,
+      email,
+      full_name: fullName,
+      roles,
+      admin_token: sessionToken,
+      csrf_token: csrfToken,
+      expires_at: expiresAt,
+      user: { id: userId, email, full_name: fullName, roles }
+    },
+    200,
+    {
+      'set-cookie': `exam_admin_session=${sessionToken}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=28800`
+    }
+  );
 }
 
 async function requestAdminOtp(env, request) {
@@ -2733,15 +2756,53 @@ export default {
     try {
       const apiResponse = await api(request, env);
       if (apiResponse) return withSecurity(apiResponse);
+      const u = new URL(request.url);
+      const isGetOrHead = ['GET', 'HEAD'].includes(request.method.toUpperCase());
+      const isStaticAsset = /\.(?:js|mjs|css|webp|png|jpg|jpeg|svg|ico|json|txt|map|woff2?)$/i.test(u.pathname);
+      if (isGetOrHead && !isStaticAsset && /^\/admin(?:\/|\.html|$)/.test(u.pathname)) {
+        const adminHtml = `<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0d2a4a" />
+  <meta name="color-scheme" content="light" />
+  <meta name="description" content="SKY FIRST EXAM 2026 — Phân hệ Quản trị Khảo thí Độc lập (/admin) với RBAC 10 vai trò, Ngân hàng câu hỏi, Tổ chức kỳ thi, Chấm thi, Phúc khảo và Nhật ký Kiểm toán." />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Quản trị Khảo thí (/admin) — SKY FIRST EXAM 2026</title>
+  <link rel="icon" type="image/webp" href="/sky-first-logo.webp" />
+  <link rel="apple-touch-icon" href="/sky-first-logo.webp" />
+  <link rel="stylesheet" href="/styles.css?build=20261025-audit-fix-1" />
+</head>
+<body>
+  <noscript>
+    <div style="padding:18px;font-family:'Times New Roman',Times,serif;background:#fff4d6;color:#5f3dc4;border-bottom:1px solid #e5dbff">
+      Phân hệ Quản trị Khảo thí SKY FIRST EXAM (/admin) yêu cầu bật JavaScript để xác thực phiên quản trị và tải dữ liệu điều hành.
+    </div>
+  </noscript>
+  <div id="app" aria-live="polite">
+    <div class="shell" style="padding-top:36px">
+      <div class="card">
+        <div class="badge">SKY FIRST EXAM 2026 • QUẢN TRỊ KHẢO THÍ ĐỘC LẬP</div>
+        <h1 class="h1" style="margin-top:10px">Đang khởi động Phân hệ Quản trị Khảo thí (/admin)…</h1>
+        <p class="sub">Hệ thống đang kiểm tra phiên làm việc quản trị viên và kết nối máy chủ khảo thí.</p>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/admin.js?build=20261025-audit-fix-1"></script>
+</body>
+</html>`;
+        return withSecurity(new Response(request.method.toUpperCase() === 'HEAD' ? null : adminHtml, {
+          status: 200,
+          headers: {
+            'content-type': 'text/html; charset=utf-8',
+            'cache-control': 'no-store, no-cache, must-revalidate'
+          }
+        }));
+      }
       let response = await env.ASSETS.fetch(request);
-      if (response.status === 404 && ['GET', 'HEAD'].includes(request.method.toUpperCase())) {
-        const u = new URL(request.url);
-        if (/^\/admin(?:\/|$)/.test(u.pathname)) {
-          const adminReq = new Request(new URL('/admin/index.html', u.origin), request);
-          const adminRes = await env.ASSETS.fetch(adminReq);
-          if (adminRes.status === 200) response = adminRes;
-          else response = await env.ASSETS.fetch(new Request(new URL('/index.html', u.origin), request));
-        } else if (/^\/(?:exam|join)(?:\/|$)/.test(u.pathname)) {
+      if (response.status === 404 && isGetOrHead) {
+        if (/^\/(?:exam|join)(?:\/|$)/.test(u.pathname)) {
           response = await env.ASSETS.fetch(new Request(new URL('/index.html', u.origin), request));
         }
       }
