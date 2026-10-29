@@ -1,6 +1,6 @@
 // =============================================================================
 // SKY FIRST EXAM 2026 — FULL /admin MANAGEMENT SUBSYSTEM (public/admin.js)
-// Real server-backed administrative console for TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST.
+// Real server-backed administrative console for Hệ Thống Khảo Thí Và Đánh Giá Sky First.
 // Zero mock numbers; server-verified RBAC; OTP login + CSRF protection.
 // =============================================================================
 
@@ -23,6 +23,8 @@ let adminState = {
   monitor: { attempts: [], support_requests: [], disclaimer: '' },
   gradingAttempt: null,
   appeals: [],
+  fraudReports: [],
+  emailLogs: [],
   auditLogs: [],
   loading: false,
   error: ''
@@ -66,7 +68,7 @@ export async function bootAdmin(appEl) {
   adminState.user = saved.user || null;
 
   const subPath = location.pathname.replace(/^\/admin\/?/, '').split('/')[0];
-  if (['dashboard', 'exams', 'questions', 'candidates', 'monitor', 'grading', 'appeals', 'users', 'audit'].includes(subPath)) {
+  if (['dashboard', 'exams', 'questions', 'candidates', 'monitor', 'grading', 'appeals', 'fraud', 'emails', 'users', 'audit'].includes(subPath)) {
     adminState.tab = subPath;
   }
 
@@ -91,67 +93,47 @@ export async function bootAdmin(appEl) {
 }
 
 function renderAdminLogin(appEl) {
-  document.title = 'Quản trị Khảo thí (/admin) | TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST';
+  document.title = 'Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First';
   appEl.className = 'gate';
   appEl.innerHTML = `
     <header class="gate-header">
-      <a class="gate-brand" href="/" aria-label="Cổng dự thi Sky First">
+      <a class="gate-brand" href="/" aria-label="Hệ Thống Khảo Thí Và Đánh Giá Sky First">
         <img src="/sky-first-logo.webp" alt="Sky First">
         <span>
-          <b>SKY FIRST NETWORK</b>
-          <small>TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST</small>
+          <b>Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</b>
+          <small>Hệ Thống Khảo Thí Và Đánh Giá Sky First</small>
         </span>
       </a>
-      <span class="gate-tag">PHÂN HỆ QUẢN TRỊ KHẢO THÍ (/ADMIN)</span>
     </header>
     <main class="gate-card gate-wide">
-      <div class="ey">MẠNG LƯỚI GIÁO DỤC VÀ PHÁT TRIỂN CỘNG ĐỒNG SKY FIRST</div>
-      <h1>Đăng nhập Quản trị Khảo thí</h1>
-      <p class="lead">Hệ thống xác thực quản trị bằng mã OTP một lần qua email đã được cấp quyền (RBAC). Mọi thao tác đăng nhập và quản trị đều được ghi nhật ký kiểm toán.</p>
-      <div class="notice">
-        <b>Nguyên tắc bảo mật:</b> Chỉ tài khoản email đã được provision vai trò quản trị trong cơ sở dữ liệu mới được nhận mã OTP. Không cấp quyền tự động theo tên miền hoặc email quen thuộc.
-      </div>
+      <div class="ey">Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</div>
+      <div class="sys-sub">Hệ Thống Khảo Thí Và Đánh Giá Sky First</div>
+      <h1>Xác thực tài khoản được cấp quyền</h1>
+      <p class="lead">Vui lòng sử dụng địa chỉ email công vụ đã được cấp quyền để nhận mã xác minh một lần.</p>
       <form id="adminOtpForm">
         <div class="two">
           <div class="field">
-            <label for="adminEmail">Email quản trị viên được cấp quyền</label>
-            <input id="adminEmail" name="email" type="email" required maxlength="220" autocomplete="email" placeholder="Ví dụ: canbo.khaothi@skyfirst.io.vn">
+            <label for="adminEmail">Địa chỉ email tài khoản</label>
+            <input id="adminEmail" name="email" type="email" required maxlength="220" autocomplete="email" placeholder="Nhập địa chỉ email được cấp quyền">
           </div>
           <div class="field">
-            <label for="adminOtp">Mã OTP quản trị (6 chữ số)</label>
-            <input id="adminOtp" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Nhập 6 chữ số OTP">
+            <label for="adminOtp">Mã xác minh (6 chữ số)</label>
+            <input id="adminOtp" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Nhập 6 chữ số">
           </div>
         </div>
         <div id="adminAuthStatus" class="notice" hidden role="status" aria-live="polite"></div>
         <div class="actions">
-          <button type="button" class="btn" id="btnSendAdminOtp">1. Yêu cầu gửi mã OTP</button>
-          <button type="submit" class="btn primary">2. Xác minh OTP & Đăng nhập →</button>
-          <a class="btn" href="/">← Về cổng thí sinh</a>
+          <button type="button" class="btn" id="btnSendAdminOtp">1. Yêu cầu gửi mã xác minh</button>
+          <button type="submit" class="btn primary">2. Xác minh & Tiếp tục →</button>
+          <a class="btn" href="/">← Về trang chủ</a>
         </div>
       </form>
-      <details class="rules" open style="margin-top:24px">
-        <summary>Đăng nhập / Khởi tạo Quản trị viên Hệ thống (Bootstrap Token — Vào thẳng /admin không cần chờ Email OTP)</summary>
-        <form id="adminBootstrapForm" style="padding-bottom:16px">
-          <p class="footnote">Nhập <code>ADMIN_BOOTSTRAP_TOKEN</code> đã cấu hình trên Cloudflare (hoặc mã mặc định lần đầu <code>SKYFIRST-2026-ADMIN</code> nếu chưa đặt biến môi trường) để kích hoạt và đăng nhập thẳng vào Bảng điều khiển <code>/admin</code>.</p>
-          <div class="two">
-            <div class="field">
-              <label for="bootToken">Mã khởi tạo hệ thống (Bootstrap Token)</label>
-              <input id="bootToken" name="bootstrap_token" type="password" required placeholder="Nhập ADMIN_BOOTSTRAP_TOKEN hoặc SKYFIRST-2026-ADMIN">
-            </div>
-            <div class="field">
-              <label for="bootEmail">Email quản trị viên cần cấp quyền</label>
-              <input id="bootEmail" name="email" type="email" required placeholder="Email nhận quyền system_admin">
-            </div>
-          </div>
-          <div class="field">
-            <label for="bootName">Họ và tên quản trị viên</label>
-            <input id="bootName" name="full_name" required placeholder="Họ tên cán bộ quản trị">
-          </div>
-          <button type="submit" class="btn">Kích hoạt quyền Quản trị hệ thống</button>
-        </form>
-      </details>
     </main>
-    <footer class="gate-footer">© 2026 SKY FIRST NETWORK · Mạng lưới Giáo dục và Phát triển Cộng đồng Sky First · TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST</footer>
+    <footer class="gate-footer">
+      <div class="footer-unit">Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</div>
+      <div class="footer-sys">Hệ Thống Khảo Thí Và Đánh Giá Sky First</div>
+      <div class="footer-contacts">Nghiệp vụ khảo thí: exam@skyfirst.io.vn · Hỗ trợ kỹ thuật: support@skyfirst.io.vn</div>
+    </footer>
   `;
 
   const statusBox = appEl.querySelector('#adminAuthStatus');
@@ -166,13 +148,13 @@ function renderAdminLogin(appEl) {
     if (!emailInput.reportValidity()) return;
     const btn = ev.currentTarget;
     btn.disabled = true;
-    btn.textContent = 'Đang kiểm tra quyền & gửi OTP…';
+    btn.textContent = 'Đang kiểm tra & gửi mã…';
     try {
       const r = await apiRequest('/api/admin/auth/request-otp', {
         method: 'POST',
         body: JSON.stringify({ email: emailInput.value.trim() })
       });
-      setStatus(r.message || 'Đã gửi mã OTP quản trị. Vui lòng kiểm tra hộp thư.', false);
+      setStatus(r.message || 'Đã gửi mã xác minh. Vui lòng kiểm tra hộp thư.', false);
       let sec = 60;
       const t = setInterval(() => {
         if (!btn.isConnected) { clearInterval(t); return; }
@@ -180,13 +162,13 @@ function renderAdminLogin(appEl) {
         if (sec <= 0) {
           clearInterval(t);
           btn.disabled = false;
-          btn.textContent = '1. Yêu cầu gửi mã OTP';
+          btn.textContent = '1. Yêu cầu gửi mã xác minh';
         }
       }, 1000);
     } catch (err) {
-      setStatus(err.message || 'Không thể gửi OTP.', true);
+      setStatus(err.message || 'Không thể gửi mã xác minh.', true);
       btn.disabled = false;
-      btn.textContent = '1. Yêu cầu gửi mã OTP';
+      btn.textContent = '1. Yêu cầu gửi mã xác minh';
     }
   });
 
@@ -196,7 +178,7 @@ function renderAdminLogin(appEl) {
     const email = form.elements.email.value.trim();
     const otp = form.elements.otp.value.trim();
     if (!otp || !/^\d{6}$/.test(otp)) {
-      setStatus('Vui lòng nhập mã OTP gồm 6 chữ số.', true);
+      setStatus('Vui lòng nhập mã xác minh gồm 6 chữ số.', true);
       return;
     }
     try {
@@ -212,32 +194,7 @@ function renderAdminLogin(appEl) {
       await loadTabData('dashboard');
       renderAdminShell(appEl);
     } catch (err) {
-      setStatus(err.message || 'Xác minh OTP thất bại.', true);
-    }
-  });
-
-  appEl.querySelector('#adminBootstrapForm')?.addEventListener('submit', async ev => {
-    ev.preventDefault();
-    const fd = Object.fromEntries(new FormData(ev.currentTarget));
-    try {
-      const r = await apiRequest('/api/admin/auth/bootstrap', {
-        method: 'POST',
-        body: JSON.stringify({ ...fd, roles: ['system_admin'] })
-      });
-      if (r && r.admin_token && r.user) {
-        adminState.token = r.admin_token;
-        adminState.csrf = r.csrf_token || '';
-        adminState.user = r.user;
-        setAdminSession(adminState.token, adminState.csrf, adminState.user);
-        showAdminToast(`Đã khởi tạo và đăng nhập Quản trị viên hệ thống (${r.user.email})!`);
-        await loadTabData('dashboard');
-        renderAdminShell(appEl);
-        return;
-      }
-      setStatus(`Đã cấp quyền system_admin cho ${r.email}. Bây giờ bạn có thể yêu cầu mã OTP để đăng nhập.`, false);
-      appEl.querySelector('#adminEmail').value = r.email;
-    } catch (err) {
-      setStatus(err.message || 'Không thể khởi tạo quản trị viên.', true);
+      setStatus(err.message || 'Xác minh thất bại.', true);
     }
   });
 }
@@ -270,6 +227,12 @@ async function loadTabData(tab) {
     } else if (tab === 'users') {
       const r = await adminReq('/api/admin/candidates');
       adminState.candidates = { enrollments: r.enrollments || [], users: r.users || [] };
+    } else if (tab === 'fraud') {
+      const r = await adminReq('/api/admin/fraud-reports');
+      adminState.fraudReports = r.fraud_reports || [];
+    } else if (tab === 'emails') {
+      const r = await adminReq('/api/admin/email-logs');
+      adminState.emailLogs = r.email_logs || [];
     } else if (tab === 'audit') {
       const r = await adminReq('/api/admin/audit-logs');
       adminState.auditLogs = r.logs || [];
@@ -289,10 +252,12 @@ function renderAdminShell(appEl) {
     { id: 'exams', label: 'Kỳ thi & Đề thi' },
     { id: 'questions', label: 'Ngân hàng câu hỏi' },
     { id: 'candidates', label: 'Thí sinh & Ghi danh' },
-    { id: 'monitor', label: 'Giám sát phòng thi' },
+    { id: 'monitor', label: 'Giám sát & Sự cố' },
     { id: 'grading', label: 'Chấm điểm & Công bố' },
     { id: 'appeals', label: 'Phúc khảo' },
-    { id: 'users', label: 'Phân quyền RBAC' },
+    { id: 'fraud', label: 'Xác minh phản ánh' },
+    { id: 'emails', label: 'Nhật ký Email' },
+    { id: 'users', label: 'Phân quyền' },
     { id: 'audit', label: 'Nhật ký kiểm toán' }
   ];
 
@@ -302,27 +267,31 @@ function renderAdminShell(appEl) {
       <div class="exam-brand">
         <img src="/sky-first-logo.webp" alt="Sky First">
         <div>
-          <b>TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST</b>
-          <small>Mạng lưới Giáo dục và Phát triển Cộng đồng Sky First</small>
+          <b>Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</b>
+          <small>Hệ Thống Khảo Thí Và Đánh Giá Sky First</small>
         </div>
       </div>
       <div class="exam-title">
-        <small>HỆ THỐNG QUẢN TRỊ KHẢO THÍ (/ADMIN)</small>
+        <small>BẢNG ĐIỀU HÀNH NGHIỆP VỤ</small>
         <h1>${esc(u.full_name)} · <span class="role-pill">${esc((u.roles || []).join(', '))}</span></h1>
       </div>
       <div class="admin-header-actions">
-        <a class="btn" href="/">Cổng thí sinh</a>
+        <a class="btn" href="/">Trang chủ công khai</a>
         <button type="button" class="btn" id="btnAdminLogout">Đăng xuất</button>
       </div>
     </header>
-    <nav class="admin-nav" aria-label="Điều hướng phân hệ quản trị">
+    <nav class="admin-nav" aria-label="Điều hướng phân hệ điều hành">
       ${tabs.map(t => `<button type="button" class="admin-tab ${adminState.tab === t.id ? 'active' : ''}" data-admin-tab="${t.id}">${esc(t.label)}</button>`).join('')}
     </nav>
     <main class="admin-workspace" id="adminMain">
       ${adminState.error ? `<div class="notice bad" role="alert">${esc(adminState.error)}</div>` : ''}
       ${renderTabContent()}
     </main>
-    <footer class="gate-footer">© 2026 SKY FIRST NETWORK · Mạng lưới Giáo dục và Phát triển Cộng đồng Sky First · TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST</footer>
+    <footer class="gate-footer">
+      <div class="footer-unit">Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</div>
+      <div class="footer-sys">Hệ Thống Khảo Thí Và Đánh Giá Sky First</div>
+      <div class="footer-contacts">Nghiệp vụ khảo thí: exam@skyfirst.io.vn · Hỗ trợ kỹ thuật: support@skyfirst.io.vn</div>
+    </footer>
   `;
 
   bindAdminEvents(appEl);
@@ -337,6 +306,8 @@ function renderTabContent() {
   if (tab === 'monitor') return renderMonitorTab();
   if (tab === 'grading') return renderGradingTab();
   if (tab === 'appeals') return renderAppealsTab();
+  if (tab === 'fraud') return renderFraudTab();
+  if (tab === 'emails') return renderEmailsTab();
   if (tab === 'users') return renderUsersTab();
   if (tab === 'audit') return renderAuditTab();
   return '';
@@ -1000,6 +971,98 @@ function renderAppealsTab() {
   `;
 }
 
+function renderFraudTab() {
+  const reports = adminState.fraudReports || [];
+  return `
+    <section class="admin-section">
+      <h2>Quản lý & Xác minh Hồ sơ Phản ánh Gian lận (${reports.length})</h2>
+      <div class="notice">Nguyên tắc xử lý: Thông tin người phản ánh được bảo mật tuyệt đối. Mọi kết luận xử lý phải căn cứ trên bằng chứng xác thực và quy chế khảo thí.</div>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Mã tiếp nhận / Thời gian</th>
+              <th>Kỳ thi & Ngày thi</th>
+              <th>Người gửi phản ánh</th>
+              <th>Đối tượng bị phản ánh</th>
+              <th>Nội dung & Minh chứng</th>
+              <th>Trạng thái & Xác minh</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${reports.length ? reports.map(fr => `
+              <tr>
+                <td><b>${esc(fr.request_code)}</b><br><small>${fmtDate(fr.created_at)}</small></td>
+                <td><b>${esc(fr.exam_title)}</b><br><small>Ngày thi: ${esc(fr.exam_date)}</small></td>
+                <td><b>${esc(fr.reporter_name)}</b><br><small>${esc(fr.reporter_phone)} · ${esc(fr.reporter_email)} · Lớp: ${esc(fr.class_name)}</small></td>
+                <td><b>${esc(fr.reported_candidate_code || 'Chưa rõ mã')}</b><br><small>${esc(fr.reported_info || '—')}</small></td>
+                <td>
+                  ${esc(fr.content)}
+                  ${fr.evidence_url ? `<br><a href="${esc(fr.evidence_url)}" target="_blank" rel="noopener">Liên kết minh chứng</a>` : ''}
+                  ${(fr.evidence_files || []).map(f => `<br><a class="btn btn-sm" href="/api/admin/service-files/${encodeURIComponent(f.file_id)}" target="_blank" rel="noopener">Tải minh chứng: ${esc(f.name)}</a>`).join('')}
+                </td>
+                <td>
+                  <span class="status-badge status-${esc(fr.status)}">${esc(fr.status)}</span>
+                  ${fr.resolution_note ? `<br><small>Kết luận: ${esc(fr.resolution_note)}</small>` : ''}
+                  <form class="fraud-resolve-form" data-report-id="${esc(fr.id)}" style="margin-top:8px">
+                    <select name="status" style="margin-bottom:4px">
+                      <option value="verifying" ${fr.status === 'verifying' ? 'selected' : ''}>Đang xác minh</option>
+                      <option value="verified" ${fr.status === 'verified' ? 'selected' : ''}>Đã xác minh & xử lý</option>
+                      <option value="dismissed" ${fr.status === 'dismissed' ? 'selected' : ''}>Chưa đủ căn cứ / Lưu hồ sơ</option>
+                    </select>
+                    <input name="resolution_note" required placeholder="Biên bản xác minh…" style="margin-bottom:4px" value="${esc(fr.resolution_note || '')}">
+                    <button type="submit" class="btn btn-sm primary">Cập nhật xác minh</button>
+                  </form>
+                </td>
+              </tr>
+            `).join('') : `<tr><td colspan="6">Chưa có hồ sơ phản ánh gian lận nào.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderEmailsTab() {
+  const logs = adminState.emailLogs || [];
+  return `
+    <section class="admin-section">
+      <h2>Nhật ký Gửi Email Tự động & Nghiệp vụ (${logs.length})</h2>
+      <div class="notice">Phân luồng người gửi chuẩn: <code>exam@skyfirst.io.vn</code> (Khảo thí & Phúc khảo) · <code>noreply@skyfirst.io.vn</code> (Hệ thống tự động & OTP) · <code>support@skyfirst.io.vn</code> (Hỗ trợ kỹ thuật & Sự cố). Không ghi mã OTP hoặc mật khẩu vào nhật ký.</div>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Thời gian</th>
+              <th>Sự kiện & Mẫu HTML</th>
+              <th>Địa chỉ gửi (From)</th>
+              <th>Người nhận (To)</th>
+              <th>Tiêu đề</th>
+              <th>Trạng thái & Nhà cung cấp</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${logs.length ? logs.map(el => `
+              <tr>
+                <td><small>${fmtDate(el.created_at)}</small></td>
+                <td><b>${esc(el.event_type)}</b><br><small><code>${esc(el.template_file)}</code></small></td>
+                <td><code>${esc(el.sender_address)}</code></td>
+                <td>${esc(el.recipient_email)}</td>
+                <td>${esc(el.subject)}</td>
+                <td>
+                  <span class="status-badge status-${esc(el.status)}">${esc(el.status)}</span>
+                  <br><small>Provider: ${esc(el.provider || '—')} (Retry: ${esc(el.retry_count || 0)})</small>
+                  ${el.error_detail ? `<br><small style="color:#9f302b">${esc(el.error_detail)}</small>` : ''}
+                </td>
+              </tr>
+            `).join('') : `<tr><td colspan="6">Chưa có bản ghi gửi email nào.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function renderUsersTab() {
   const users = adminState.candidates?.users || [];
   const allRoles = [
@@ -1460,6 +1523,28 @@ function bindAdminEvents(appEl) {
           adminState.gradingAttempt = r.attempt;
         }
         await loadTabData('grading');
+        renderAdminShell(appEl);
+      } catch (err) {
+        showAdminToast(err.message, true);
+      }
+    });
+  });
+
+  appEl.querySelectorAll('.fraud-resolve-form').forEach(form => {
+    form.addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const reportId = form.dataset.reportId;
+      const fd = new FormData(form);
+      try {
+        await adminReq(`/api/admin/fraud-reports/${encodeURIComponent(reportId)}/resolve`, {
+          method: 'POST',
+          body: JSON.stringify({
+            status: String(fd.get('status') || 'verifying'),
+            resolution_note: String(fd.get('resolution_note') || '')
+          })
+        });
+        showAdminToast('Đã cập nhật trạng thái xác minh phản ánh.');
+        await loadTabData('fraud');
         renderAdminShell(appEl);
       } catch (err) {
         showAdminToast(err.message, true);

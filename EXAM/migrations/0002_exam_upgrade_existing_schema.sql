@@ -130,3 +130,66 @@ CREATE INDEX IF NOT EXISTS idx_exam_enrollments_exam ON exam_enrollments(exam_id
 CREATE INDEX IF NOT EXISTS idx_exam_otp_email ON exam_otp_challenges(email, purpose);
 CREATE INDEX IF NOT EXISTS idx_exam_qbank_topic ON exam_question_bank(topic, difficulty, status);
 CREATE INDEX IF NOT EXISTS idx_exam_audit_exam ON exam_audit_log(exam_id, event_type);
+
+CREATE TABLE IF NOT EXISTS exam_fraud_reports (
+  id TEXT PRIMARY KEY,
+  request_code TEXT NOT NULL UNIQUE,
+  reporter_name TEXT NOT NULL,
+  reporter_phone TEXT NOT NULL,
+  reporter_email TEXT NOT NULL,
+  class_name TEXT NOT NULL,
+  exam_id TEXT,
+  exam_title TEXT NOT NULL,
+  exam_date TEXT NOT NULL,
+  reported_candidate_code TEXT DEFAULT '',
+  reported_info TEXT DEFAULT '',
+  content TEXT NOT NULL,
+  evidence_url TEXT DEFAULT '',
+  evidence_files_json TEXT DEFAULT '[]',
+  status TEXT DEFAULT 'received',
+  resolution_note TEXT DEFAULT '',
+  resolved_by TEXT,
+  resolved_at TEXT,
+  history_json TEXT DEFAULT '[]',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS exam_service_files (
+  id TEXT PRIMARY KEY,
+  service_type TEXT NOT NULL,
+  request_id TEXT,
+  r2_key TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  safe_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  uploaded_by_email TEXT DEFAULT '',
+  status TEXT DEFAULT 'active',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS exam_email_logs (
+  id TEXT PRIMARY KEY,
+  idempotency_key TEXT UNIQUE,
+  event_type TEXT NOT NULL,
+  template_file TEXT NOT NULL,
+  sender_address TEXT NOT NULL,
+  recipient_email TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  status TEXT NOT NULL,
+  provider TEXT DEFAULT '',
+  provider_message_id TEXT,
+  retry_count INTEGER DEFAULT 0,
+  error_detail TEXT DEFAULT '',
+  exam_id TEXT,
+  attempt_id TEXT,
+  request_id TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_exam_fraud_reports_code ON exam_fraud_reports(request_code);
+CREATE INDEX IF NOT EXISTS idx_exam_service_files_req ON exam_service_files(service_type, request_id);
+CREATE INDEX IF NOT EXISTS idx_exam_email_logs_event ON exam_email_logs(event_type, status);

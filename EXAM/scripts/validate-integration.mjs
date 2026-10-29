@@ -839,6 +839,130 @@ try {
     }
   });
 
+
+  // Scenario 15b: Separated Service Workflows (/phuc-khao, /ho-tro, /bao-loi, /su-co-khan-cap, /to-cao-gian-lan), Evidence File Validation, Sender Routing & Email Logs
+  await scenario('Separated business endpoints, evidence file upload validation, 3-sender email routing, and email logs work end-to-end', async () => {
+    // 1. Upload valid PNG evidence file via /api/public/service-files/upload
+    const validPngBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]);
+    const validBlob = new Blob([validPngBytes], { type: 'image/png' });
+    const fdValid = new FormData();
+    fdValid.set('file', validBlob, 'minh-chung.png');
+    fdValid.set('service_type', 'fraud_report');
+    fdValid.set('email', 'reporter@example.com');
+    const upOk = await call('/api/public/service-files/upload', { method: 'POST', formData: fdValid });
+    assert.equal(upOk.status, 200);
+    assert.ok(upOk.data.file.file_id);
+
+    // 2. Reject dangerous executable (.exe) or forged file signature (415)
+    const badBlob = new Blob([validPngBytes], { type: 'application/octet-stream' });
+    const fdBad = new FormData();
+    fdBad.set('file', badBlob, 'malware.exe');
+    fdBad.set('service_type', 'bug_report');
+    const upBad = await call('/api/public/service-files/upload', { method: 'POST', formData: fdBad });
+    assert.equal(upBad.status, 415);
+
+    // 3. Bug report (/bao-loi -> POST /api/public/bug-reports) sends technical-incident.html from support@skyfirst.io.vn
+    const bugRes = await call('/api/public/bug-reports', {
+      method: 'POST',
+      body: {
+        full_name: 'Trần Văn Bình',
+        phone: '0901234567',
+        email: 'binh.tran@example.com',
+        class_name: 'Lớp 12A2',
+        candidate_code: 'SFN-002',
+        exam_title: 'Kỳ thi Đánh giá Năng lực Sky First 2026',
+        exam_date: '29/10/2026',
+        occurred_at: '09:30 29/10/2026',
+        message: 'Màn hình câu hỏi số 3 bị chậm tải hình ảnh minh họa.'
+      }
+    });
+    assert.equal(bugRes.status, 200);
+    assert.match(bugRes.data.request_code, /^BL-/);
+    assert.equal(sentEmails.at(-1).from, 'support@skyfirst.io.vn');
+    assert.equal(sentEmails.at(-1).template_file, 'technical-incident.html');
+
+    // 4. Emergency incident (/su-co-khan-cap -> POST /api/public/emergency-incidents)
+    const emgRes = await call('/api/public/emergency-incidents', {
+      method: 'POST',
+      body: {
+        full_name: 'Trần Văn Bình',
+        phone: '0901234567',
+        email: 'binh.tran@example.com',
+        class_name: 'Lớp 12A2',
+        candidate_code: 'SFN-002',
+        exam_title: 'Kỳ thi Đánh giá Năng lực Sky First 2026',
+        occurred_at: '09:35 29/10/2026',
+        attempt_id: guestAttemptId,
+        message: 'Mất kết nối mạng đột ngột khi đang lưu câu tự luận.'
+      }
+    });
+    assert.equal(emgRes.status, 200);
+    assert.match(emgRes.data.request_code, /^KC-/);
+    assert.equal(sentEmails.at(-1).from, 'support@skyfirst.io.vn');
+    assert.equal(sentEmails.at(-1).template_file, 'technical-incident.html');
+
+    // 5. Fraud report (/to-cao-gian-lan -> POST /api/public/fraud-reports)
+    // Rejects when missing both evidence file and evidence URL (400 EVIDENCE_REQUIRED)
+    const fraudNoEv = await call('/api/public/fraud-reports', {
+      method: 'POST',
+      body: {
+        reporter_name: 'Lê Thị Hoa',
+        phone: '0912345678',
+        email: 'hoa.le@example.com',
+        class_name: 'Lớp 12A3',
+        exam_title: 'Kỳ thi Đánh giá Năng lực Sky First 2026',
+        exam_date: '29/10/2026',
+        content: 'Phát hiện có tài khoản chia sẻ đề thi lên nhóm mạng xã hội trong giờ thi.'
+      }
+    });
+    assert.equal(fraudNoEv.status, 400);
+    assert.equal(fraudNoEv.data.detail?.code, 'EVIDENCE_REQUIRED');
+
+    // Succeeds when valid evidence file or URL is provided, sends fraud-report.html from noreply@skyfirst.io.vn
+    const fraudOk = await call('/api/public/fraud-reports', {
+      method: 'POST',
+      body: {
+        reporter_name: 'Lê Thị Hoa',
+        phone: '0912345678',
+        email: 'hoa.le@example.com',
+        class_name: 'Lớp 12A3',
+        exam_title: 'Kỳ thi Đánh giá Năng lực Sky First 2026',
+        exam_date: '29/10/2026',
+        reported_candidate_code: 'SFN-999',
+        content: 'Phát hiện có tài khoản chia sẻ đề thi lên nhóm mạng xã hội trong giờ thi.',
+        evidence_file_ids: [upOk.data.file.file_id],
+        evidence_url: 'https://exam.skyfirst.io.vn/evidence-post-123'
+      }
+    });
+    assert.equal(fraudOk.status, 200);
+    assert.match(fraudOk.data.request_code, /^TC-/);
+    assert.equal(sentEmails.at(-1).from, 'noreply@skyfirst.io.vn');
+    assert.equal(sentEmails.at(-1).template_file, 'fraud-report.html');
+
+    // Track fraud report with matching email succeeds; wrong email is rejected (404)
+    const trackFraudBad = await call('/api/public/fraud-reports/track', {
+      method: 'POST',
+      body: { request_code: fraudOk.data.request_code, email: 'other@example.com' }
+    });
+    assert.equal(trackFraudBad.status, 404);
+
+    const trackFraudGood = await call('/api/public/fraud-reports/track', {
+      method: 'POST',
+      body: { request_code: fraudOk.data.request_code, email: 'hoa.le@example.com' }
+    });
+    assert.equal(trackFraudGood.status, 200);
+    assert.equal(trackFraudGood.data.report.status, 'received');
+
+    // Unauthenticated download of service evidence file is rejected (401)
+    const unauthFile = await call(`/api/admin/service-files/${upOk.data.file.file_id}`);
+    assert.equal(unauthFile.status, 401);
+
+    // Authorized admin can view email logs & verify no OTP code appears in exam_email_logs
+    const emailLogsRes = await call('/api/admin/email-logs', { token: sysAdminToken });
+    assert.equal(emailLogsRes.status, 200);
+    assert.ok(emailLogsRes.data.email_logs.length >= 4);
+  });
+
   console.log(`STANDALONE EXAM 2026 INTEGRATION SUITE: ${passed}/${passed} PASS`);
 } finally {
   globalThis.fetch = originalFetch;

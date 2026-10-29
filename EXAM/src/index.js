@@ -1,3 +1,11 @@
+import {
+  BRAND_UNIT_NAME,
+  BRAND_SYSTEM_NAME,
+  EMAIL_SENDERS,
+  EMAIL_TEMPLATES,
+  renderEmailTemplate
+} from './email-templates.js';
+
 // =============================================================================
 // SKY FIRST EXAM 2026 — STANDALONE CLOUDFLARE WORKER BACKEND (src/index.js)
 // Complete, independent examination platform with zero dependency on SLC.
@@ -44,13 +52,13 @@ export const ADMIN_ROLES = [
 export const ROLE_PERMISSIONS = {
   system_admin: new Set(['*']),
   account_admin: new Set(['dashboard:view', 'users:read', 'users:write', 'audit:read']),
-  exam_admin: new Set(['dashboard:view', 'exams:read', 'exams:write', 'exams:lifecycle', 'questions:read', 'questions:write', 'questions:delete', 'candidates:read', 'candidates:write', 'monitor:read', 'monitor:write', 'support:read', 'support:write', 'grading:read', 'results:read', 'audit:read']),
+  exam_admin: new Set(['dashboard:view', 'exams:read', 'exams:write', 'exams:lifecycle', 'questions:read', 'questions:write', 'questions:delete', 'candidates:read', 'candidates:write', 'monitor:read', 'monitor:write', 'support:read', 'support:write', 'grading:read', 'results:read', 'audit:read', 'fraud:read', 'fraud:write', 'email_logs:read']),
   question_bank_manager: new Set(['dashboard:view', 'questions:read', 'questions:write', 'questions:delete', 'exams:read']),
   exam_author: new Set(['dashboard:view', 'questions:read', 'questions:write', 'exams:read', 'exams:write']),
   proctor: new Set(['dashboard:view', 'monitor:read', 'monitor:write', 'support:read', 'support:write', 'candidates:read', 'exams:read']),
   grader: new Set(['dashboard:view', 'grading:read', 'grading:write', 'exams:read']),
   result_approver: new Set(['dashboard:view', 'grading:read', 'results:read', 'results:approve', 'results:publish', 'results:revoke', 'exams:read', 'audit:read']),
-  appeal_officer: new Set(['dashboard:view', 'appeals:read', 'appeals:write', 'grading:read', 'results:read', 'audit:read']),
+  appeal_officer: new Set(['dashboard:view', 'appeals:read', 'appeals:write', 'grading:read', 'results:read', 'audit:read', 'fraud:read']),
   report_viewer: new Set(['dashboard:view', 'exams:read', 'questions:read', 'results:read', 'candidates:read', 'monitor:read', 'appeals:read', 'support:read', 'audit:read'])
 };
 
@@ -458,7 +466,10 @@ async function ensureAdditiveSchema(env) {
       `CREATE TABLE IF NOT EXISTS exam_enrollments(id TEXT PRIMARY KEY,exam_id TEXT NOT NULL,user_id TEXT,email TEXT NOT NULL,full_name TEXT NOT NULL,candidate_code TEXT NOT NULL,class_name TEXT DEFAULT '',status TEXT DEFAULT 'active',verified_at TEXT,notes TEXT DEFAULT '',created_by TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(exam_id,email))`,
       `CREATE TABLE IF NOT EXISTS exam_appeals(id TEXT PRIMARY KEY,attempt_id TEXT NOT NULL,exam_id TEXT NOT NULL,candidate_email TEXT,candidate_code TEXT,reason TEXT NOT NULL,status TEXT DEFAULT 'pending',resolution_note TEXT DEFAULT '',score_before REAL,score_after REAL,resolved_by TEXT,resolved_at TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP)`,
       `CREATE TABLE IF NOT EXISTS exam_support_requests(id TEXT PRIMARY KEY,exam_id TEXT,attempt_id TEXT,candidate_name TEXT,candidate_email TEXT,candidate_code TEXT,issue_type TEXT DEFAULT 'technical',message TEXT NOT NULL,status TEXT DEFAULT 'open',resolution_note TEXT DEFAULT '',resolved_by TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP)`,
-      `CREATE TABLE IF NOT EXISTS exam_rate_limits(bucket_key TEXT PRIMARY KEY,count INTEGER DEFAULT 1,window_start_ms INTEGER NOT NULL)`
+      `CREATE TABLE IF NOT EXISTS exam_rate_limits(bucket_key TEXT PRIMARY KEY,count INTEGER DEFAULT 1,window_start_ms INTEGER NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS exam_fraud_reports(id TEXT PRIMARY KEY,request_code TEXT NOT NULL UNIQUE,reporter_name TEXT NOT NULL,reporter_phone TEXT NOT NULL,reporter_email TEXT NOT NULL,class_name TEXT NOT NULL,exam_id TEXT,exam_title TEXT NOT NULL,exam_date TEXT NOT NULL,reported_candidate_code TEXT DEFAULT '',reported_info TEXT DEFAULT '',content TEXT NOT NULL,evidence_url TEXT DEFAULT '',evidence_files_json TEXT DEFAULT '[]',status TEXT DEFAULT 'received',resolution_note TEXT DEFAULT '',resolved_by TEXT,resolved_at TEXT,history_json TEXT DEFAULT '[]',created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP)`,
+      `CREATE TABLE IF NOT EXISTS exam_service_files(id TEXT PRIMARY KEY,service_type TEXT NOT NULL,request_id TEXT,r2_key TEXT NOT NULL,original_name TEXT NOT NULL,safe_name TEXT NOT NULL,mime_type TEXT NOT NULL,byte_size INTEGER NOT NULL,sha256 TEXT NOT NULL,uploaded_by_email TEXT DEFAULT '',status TEXT DEFAULT 'active',created_at TEXT DEFAULT CURRENT_TIMESTAMP)`,
+      `CREATE TABLE IF NOT EXISTS exam_email_logs(id TEXT PRIMARY KEY,idempotency_key TEXT UNIQUE,event_type TEXT NOT NULL,template_file TEXT NOT NULL,sender_address TEXT NOT NULL,recipient_email TEXT NOT NULL,subject TEXT NOT NULL,status TEXT NOT NULL,provider TEXT DEFAULT '',provider_message_id TEXT,retry_count INTEGER DEFAULT 0,error_detail TEXT DEFAULT '',exam_id TEXT,attempt_id TEXT,request_id TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP)`
     ];
     for (const stmt of ddl) {
       await env.DB.prepare(stmt).run().catch(() => {});
@@ -491,7 +502,26 @@ async function ensureAdditiveSchema(env) {
       `ALTER TABLE assessment_result_workflows ADD COLUMN published_at TEXT`,
       `ALTER TABLE assessment_result_workflows ADD COLUMN revoked_by TEXT`,
       `ALTER TABLE assessment_result_workflows ADD COLUMN revoked_at TEXT`,
-      `ALTER TABLE assessment_result_workflows ADD COLUMN revoke_reason TEXT`
+      `ALTER TABLE assessment_result_workflows ADD COLUMN revoke_reason TEXT`,
+      `ALTER TABLE exam_appeals ADD COLUMN request_code TEXT`,
+      `ALTER TABLE exam_appeals ADD COLUMN full_name TEXT DEFAULT ''`,
+      `ALTER TABLE exam_appeals ADD COLUMN phone TEXT DEFAULT ''`,
+      `ALTER TABLE exam_appeals ADD COLUMN class_name TEXT DEFAULT ''`,
+      `ALTER TABLE exam_appeals ADD COLUMN exam_title TEXT DEFAULT ''`,
+      `ALTER TABLE exam_appeals ADD COLUMN exam_date TEXT DEFAULT ''`,
+      `ALTER TABLE exam_appeals ADD COLUMN receipt_code TEXT DEFAULT ''`,
+      `ALTER TABLE exam_appeals ADD COLUMN evidence_files_json TEXT DEFAULT '[]'`,
+      `ALTER TABLE exam_appeals ADD COLUMN history_json TEXT DEFAULT '[]'`,
+      `ALTER TABLE exam_support_requests ADD COLUMN request_code TEXT`,
+      `ALTER TABLE exam_support_requests ADD COLUMN phone TEXT DEFAULT ''`,
+      `ALTER TABLE exam_support_requests ADD COLUMN class_name TEXT DEFAULT ''`,
+      `ALTER TABLE exam_support_requests ADD COLUMN exam_title TEXT DEFAULT ''`,
+      `ALTER TABLE exam_support_requests ADD COLUMN exam_date TEXT DEFAULT ''`,
+      `ALTER TABLE exam_support_requests ADD COLUMN occurred_at TEXT DEFAULT ''`,
+      `ALTER TABLE exam_support_requests ADD COLUMN category TEXT DEFAULT 'support'`,
+      `ALTER TABLE exam_support_requests ADD COLUMN technical_meta_json TEXT DEFAULT '{}'`,
+      `ALTER TABLE exam_support_requests ADD COLUMN evidence_files_json TEXT DEFAULT '[]'`,
+      `ALTER TABLE exam_support_requests ADD COLUMN history_json TEXT DEFAULT '[]'`
     ];
     for (const sql of alters) {
       await env.DB.prepare(sql).run().catch(() => {});
@@ -533,50 +563,277 @@ async function recordAudit(env, { examId = null, attemptId = null, actorUserId =
 // =============================================================================
 // EMAIL DELIVERY SERVICE (Honest Verification, Never Fake-Success on Unconfigured)
 // =============================================================================
-async function dispatchBusinessEmail(env, { to, subject, text, html, category = 'transactional' }) {
-  // Never log OTP or secret content
-  if (typeof env?.EMAIL_DISPATCHER === 'function') {
-    const res = await env.EMAIL_DISPATCHER({ to, subject, text, html, category });
-    return { delivered: true, provider: 'custom_dispatcher', id: res?.id || null };
+const ALLOWED_SERVER_SENDERS = new Set([
+  EMAIL_SENDERS.EXAM,
+  EMAIL_SENDERS.NOREPLY,
+  EMAIL_SENDERS.SUPPORT
+]);
+
+function generateRequestCode(prefix = 'YC') {
+  return `${prefix}-${randomHex(3).toUpperCase()}-${randomHex(2).toUpperCase()}`;
+}
+
+async function logEmailState(env, entry) {
+  if (!env?.DB) return;
+  try {
+    await ensureAdditiveSchema(env);
+    await env.DB.prepare(
+      `INSERT INTO exam_email_logs(id,idempotency_key,event_type,template_file,sender_address,recipient_email,subject,status,provider,provider_message_id,retry_count,error_detail,exam_id,attempt_id,request_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET status=excluded.status,provider=excluded.provider,provider_message_id=excluded.provider_message_id,retry_count=excluded.retry_count,error_detail=excluded.error_detail,updated_at=CURRENT_TIMESTAMP`
+    ).bind(
+      entry.id,
+      entry.idempotency_key || null,
+      entry.event_type || 'system_notification',
+      entry.template_file || 'system-notification.html',
+      entry.sender_address || EMAIL_SENDERS.NOREPLY,
+      entry.recipient_email || '',
+      entry.subject || '',
+      entry.status || 'queued',
+      entry.provider || '',
+      entry.provider_message_id || null,
+      Number(entry.retry_count || 0),
+      String(entry.error_detail || '').slice(0, 500),
+      entry.exam_id || null,
+      entry.attempt_id || null,
+      entry.request_id || null
+    ).run();
+  } catch {}
+}
+
+async function dispatchBusinessEmail(env, {
+  to,
+  from,
+  subject,
+  text,
+  html,
+  category = 'system',
+  eventType = 'system_notification',
+  templateFile = 'system-notification.html',
+  idempotencyKey = null,
+  examId = null,
+  attemptId = null,
+  requestId = null,
+  throwOnProviderError = true
+}) {
+  // Never log OTP or secret content; enforce server-controlled sender addresses
+  const cleanTo = str(to).toLowerCase();
+  if (!cleanTo || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanTo)) {
+    return { delivered: false, status: 'rejected', provider: 'validation', reason: 'Địa chỉ email người nhận không hợp lệ.' };
   }
-  const apiUrl = str(env?.EMAIL_API_URL);
-  const apiKey = str(env?.EMAIL_API_KEY);
-  const fromEmail = str(env?.EMAIL_FROM || 'no-reply@exam.skyfirst.io.vn');
-  if (apiUrl && apiKey) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10000);
+
+  const enforcedFrom = ALLOWED_SERVER_SENDERS.has(str(from))
+    ? str(from)
+    : (category === 'exam' ? EMAIL_SENDERS.EXAM : category === 'support' ? EMAIL_SENDERS.SUPPORT : EMAIL_SENDERS.NOREPLY);
+
+  if (idempotencyKey && env?.DB) {
     try {
-      const resp = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'authorization': `Bearer ${apiKey}`,
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify({
-          from: fromEmail,
-          to: [to],
+      await ensureAdditiveSchema(env);
+      const existing = await env.DB.prepare(
+        `SELECT id, status, provider, provider_message_id FROM exam_email_logs WHERE idempotency_key=? LIMIT 1`
+      ).bind(idempotencyKey).first();
+      if (existing && (existing.status === 'sent' || existing.status === 'accepted')) {
+        return {
+          delivered: true,
+          deduplicated: true,
+          status: existing.status,
+          provider: existing.provider || 'deduplicated',
+          id: existing.provider_message_id || existing.id,
+          from: enforcedFrom,
+          template_file: templateFile
+        };
+      }
+    } catch {}
+  }
+
+  const logId = crypto.randomUUID();
+  const baseLog = {
+    id: logId,
+    idempotency_key: idempotencyKey,
+    event_type: eventType,
+    template_file: templateFile,
+    sender_address: enforcedFrom,
+    recipient_email: cleanTo,
+    subject: str(subject).slice(0, 300),
+    exam_id: examId,
+    attempt_id: attemptId,
+    request_id: requestId
+  };
+
+  await logEmailState(env, { ...baseLog, status: 'queued', provider: 'pending', retry_count: 0 });
+
+  if (typeof env?.EMAIL_DISPATCHER === 'function') {
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await env.EMAIL_DISPATCHER({
+          from: enforcedFrom,
+          to: cleanTo,
           subject,
           text,
-          html
-        }),
-        signal: controller.signal
-      });
-      if (!resp.ok) {
-        throw httpError('Dịch vụ gửi email trả về lỗi.', 502, { code: 'EMAIL_PROVIDER_ERROR', status: resp.status });
+          html,
+          category,
+          event_type: eventType,
+          template_file: templateFile
+        });
+        const providerStatus = res?.status === 'accepted' ? 'accepted' : 'sent';
+        await logEmailState(env, {
+          ...baseLog,
+          status: providerStatus,
+          provider: 'custom_dispatcher',
+          provider_message_id: res?.id || null,
+          retry_count: attempt
+        });
+        return {
+          delivered: true,
+          status: providerStatus,
+          provider: 'custom_dispatcher',
+          id: res?.id || null,
+          from: enforcedFrom,
+          template_file: templateFile
+        };
+      } catch (err) {
+        lastErr = err;
+        if (attempt === 0 && (!err?.status || err.status >= 500)) continue;
+        break;
       }
-      return { delivered: true, provider: 'http_api' };
-    } catch (err) {
-      if (err?.status) throw err;
-      throw httpError('Không thể kết nối dịch vụ gửi email.', 502, { code: 'EMAIL_NETWORK_ERROR' });
-    } finally {
-      clearTimeout(timer);
     }
+    await logEmailState(env, {
+      ...baseLog,
+      status: 'failed',
+      provider: 'custom_dispatcher',
+      retry_count: 1,
+      error_detail: lastErr?.message || 'EMAIL_PROVIDER_ERROR'
+    });
+    if (throwOnProviderError) {
+      if (lastErr?.status) throw lastErr;
+      throw httpError('Dịch vụ gửi email trả về lỗi.', 502, { code: 'EMAIL_PROVIDER_ERROR' });
+    }
+    return { delivered: false, status: 'failed', provider: 'custom_dispatcher', reason: lastErr?.message || 'Lỗi dịch vụ gửi email' };
   }
+
+  const apiUrl = str(env?.EMAIL_API_URL);
+  const apiKey = str(env?.EMAIL_API_KEY);
+  if (apiUrl && apiKey) {
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      try {
+        const resp = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'authorization': `Bearer ${apiKey}`,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            from: enforcedFrom,
+            to: [cleanTo],
+            subject,
+            text,
+            html,
+            headers: {
+              'X-SkyFirst-Event': eventType,
+              'X-SkyFirst-Template': templateFile
+            }
+          }),
+          signal: controller.signal
+        });
+        if (!resp.ok) {
+          const status = resp.status;
+          if (status >= 400 && status < 500 && status !== 429) {
+            await logEmailState(env, {
+              ...baseLog,
+              status: 'rejected',
+              provider: 'http_api',
+              retry_count: attempt,
+              error_detail: `HTTP ${status}`
+            });
+            if (throwOnProviderError) {
+              throw httpError('Nhà cung cấp dịch vụ email từ chối yêu cầu gửi thư.', 502, { code: 'EMAIL_REJECTED', status });
+            }
+            return { delivered: false, status: 'rejected', provider: 'http_api', reason: `HTTP ${status}` };
+          }
+          throw httpError('Dịch vụ gửi email trả về lỗi.', 502, { code: 'EMAIL_PROVIDER_ERROR', status });
+        }
+        const respData = await resp.json().catch(() => ({}));
+        const deliveryStatus = resp.status === 202 ? 'accepted' : 'sent';
+        await logEmailState(env, {
+          ...baseLog,
+          status: deliveryStatus,
+          provider: 'http_api',
+          provider_message_id: respData?.id || respData?.message_id || null,
+          retry_count: attempt
+        });
+        return {
+          delivered: true,
+          status: deliveryStatus,
+          provider: 'http_api',
+          id: respData?.id || respData?.message_id || null,
+          from: enforcedFrom,
+          template_file: templateFile
+        };
+      } catch (err) {
+        lastErr = err;
+        if (attempt === 0) continue;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    await logEmailState(env, {
+      ...baseLog,
+      status: 'failed',
+      provider: 'http_api',
+      retry_count: 1,
+      error_detail: lastErr?.message || 'EMAIL_NETWORK_ERROR'
+    });
+    if (throwOnProviderError) {
+      if (lastErr?.status) throw lastErr;
+      throw httpError('Không thể kết nối dịch vụ gửi email.', 502, { code: 'EMAIL_NETWORK_ERROR' });
+    }
+    return { delivered: false, status: 'failed', provider: 'http_api', reason: lastErr?.message || 'Lỗi kết nối dịch vụ email' };
+  }
+
+  await logEmailState(env, {
+    ...baseLog,
+    status: 'unconfigured',
+    provider: 'unconfigured',
+    retry_count: 0,
+    error_detail: 'Chưa cấu hình EMAIL_API_URL / EMAIL_API_KEY'
+  });
   return {
     delivered: false,
+    status: 'unconfigured',
     provider: 'unconfigured',
+    from: enforcedFrom,
+    template_file: templateFile,
     reason: 'Chưa cấu hình dịch vụ gửi email (EMAIL_API_URL / EMAIL_API_KEY) trong môi trường hiện tại.'
   };
+}
+
+async function dispatchEventEmail(env, eventType, {
+  to,
+  data = {},
+  idempotencyKey = null,
+  examId = null,
+  attemptId = null,
+  requestId = null,
+  throwOnProviderError = false
+}) {
+  const rendered = renderEmailTemplate(eventType, data);
+  return dispatchBusinessEmail(env, {
+    to,
+    from: rendered.from,
+    subject: rendered.subject,
+    text: rendered.text,
+    html: rendered.html,
+    category: rendered.group,
+    eventType: rendered.event_type,
+    templateFile: rendered.template_file,
+    idempotencyKey,
+    examId,
+    attemptId,
+    requestId,
+    throwOnProviderError
+  });
 }
 
 // =============================================================================
@@ -735,7 +992,30 @@ async function finalize(env, source, a, body, afterDeadline = false, retries = 0
   }
   await seedManual(env, a.id, scored.manual);
   const fresh = { ...a, status: 'submitted', answers_json: JSON.stringify(answers), event_log_json: JSON.stringify(events), score: scored.score, max_score: scored.max };
-  return finalResponse(env, fresh);
+  const finalRes = await finalResponse(env, fresh);
+  if (a.email && (env?.SEND_LIFECYCLE_EMAILS === '1' || env?.EMAIL_API_URL)) {
+    await dispatchEventEmail(env, 'exam_session_ended', {
+      to: a.email,
+      examId: a.exam_id,
+      attemptId: a.id,
+      idempotencyKey: `exam-ended:${a.id}`,
+      throwOnProviderError: false,
+      data: {
+        recipient_name: a.full_name || a.candidate_code || a.email,
+        exam_title: a.title || a.exam_id,
+        candidate_code: a.candidate_code || a.sfn_id || '',
+        class_name: a.class_name || '',
+        attempt_id: a.id,
+        receipt_code: finalRes.receipt_code || '',
+        submitted_at: nowIso(),
+        score: finalRes.show_score ? finalRes.score : null,
+        max_score: finalRes.show_score ? finalRes.max_score : null,
+        show_score: finalRes.show_score,
+        status_label: finalRes.pending_manual ? 'Đã nộp bài · Đang chờ chấm tự luận' : 'Đã nộp bài thành công'
+      }
+    }).catch(() => {});
+  }
+  return finalRes;
 }
 
 async function getAttempt(env, source, attemptId, request) {
@@ -900,6 +1180,24 @@ async function recordViolation(env, source, attemptId, request) {
   if (!Number(updated?.[0]?.meta?.changes || 0)) {
     throw Object.assign(new Error('Bài làm vừa được cập nhật ở phiên khác.'), { status: 409, detail: { code: 'REVISION_CONFLICT' } });
   }
+  if (shouldLock && a.email && (env?.SEND_LIFECYCLE_EMAILS === '1' || env?.EMAIL_API_URL)) {
+    await dispatchEventEmail(env, 'integrity_warning', {
+      to: a.email,
+      examId: a.exam_id,
+      attemptId: a.id,
+      idempotencyKey: `integrity-lock:${a.id}:${currentRevision}`,
+      throwOnProviderError: false,
+      data: {
+        recipient_name: a.full_name || a.candidate_code || a.email,
+        exam_title: a.title || a.exam_id,
+        candidate_code: a.candidate_code || a.sfn_id || '',
+        attempt_id: a.id,
+        event_time: nowIso(),
+        status_label: 'Cảnh báo tín hiệu giám sát · Phiên thi tạm khóa để kiểm tra',
+        reason: `Ghi nhận ${integrityViolations} tín hiệu (${reason})`
+      }
+    }).catch(() => {});
+  }
   return ok({ recorded: true, terminated: false, locked: shouldLock, violation_count: integrityViolations });
 }
 
@@ -1025,7 +1323,7 @@ async function listPublicCatalog(env) {
       code: e.public_token || e.id,
       title: e.title,
       assessment_label: e.assessment_label || 'Đánh giá năng lực',
-      center_label: e.center_label || 'TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST',
+      center_label: e.center_label || 'Hệ Thống Khảo Thí Và Đánh Giá Sky First',
       duration_minutes: e.duration_minutes,
       time_limit_enabled: Number(e.time_limit_enabled) !== 0,
       strict_mode: Number(e.strict_mode) !== 0,
@@ -1078,7 +1376,7 @@ async function getPublicAssessmentInfo(env, code) {
       fullscreen_required: Number(e.fullscreen_required) !== 0,
       assessment_type: e.assessment_type,
       assessment_label: e.assessment_label || 'Đánh giá năng lực',
-      center_label: e.center_label || 'TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST',
+      center_label: e.center_label || 'Hệ Thống Khảo Thí Và Đánh Giá Sky First',
       require_email_verify: Number(e.require_email_verify) !== 0,
       public_status: publicStatus,
       status: e.status,
@@ -1133,11 +1431,20 @@ async function requestCandidateVerification(env, code, request) {
     `INSERT INTO exam_otp_challenges(id,email,purpose,scope_id,otp_hash,attempts,max_attempts,expires_at,created_at) VALUES(?,?,'candidate_verify',?,?,0,5,?,CURRENT_TIMESTAMP)`
   ).bind(challengeId, email, e.id, otpHash, expiresAt).run();
 
-  const mailResult = await dispatchBusinessEmail(env, {
+  const mailResult = await dispatchEventEmail(env, 'email_verification', {
     to: email,
-    subject: `[Sky First EXAM] Mã xác minh dự thi: ${e.title}`,
-    text: `Mã xác minh dự thi của bạn cho kỳ thi "${e.title}" là: ${otp}. Mã có hiệu lực trong 10 phút và chỉ sử dụng một lần.`,
-    html: `<p>Xin chào,</p><p>Mã xác minh dự thi của bạn cho kỳ thi <b>${e.title}</b> là: <strong style="font-size:18px">${otp}</strong></p><p>Mã có hiệu lực trong 10 phút và chỉ sử dụng một lần.</p>`
+    examId: e.id,
+    idempotencyKey: `cand-otp:${challengeId}`,
+    throwOnProviderError: true,
+    data: {
+      recipient_name: enrolled?.full_name || email,
+      exam_title: e.title,
+      candidate_code: enrolled?.candidate_code || '',
+      class_name: enrolled?.class_name || '',
+      otp_code: otp,
+      expires_minutes: 10,
+      status_label: 'Chờ xác minh mã OTP dự thi'
+    }
   });
 
   await recordAudit(env, {
@@ -1294,6 +1601,163 @@ async function startPublicAssessment(env, code, request) {
   return ok({ attempt_id: attemptId, access_key: accessKey, resumed: false });
 }
 
+const FORBIDDEN_EVIDENCE_EXTENSIONS = new Set([
+  'exe', 'bat', 'cmd', 'com', 'sh', 'bash', 'ps1', 'vbs', 'js', 'mjs', 'cjs',
+  'php', 'py', 'rb', 'pl', 'jar', 'dll', 'so', 'dylib', 'msi', 'scr', 'html',
+  'htm', 'xhtml', 'svg', 'xml', 'hta', 'wsf', 'reg'
+]);
+
+const ALLOWED_EVIDENCE_EXTENSIONS = new Set([
+  'jpg', 'jpeg', 'png', 'webp', 'pdf', 'txt', 'csv', 'doc', 'docx', 'xls',
+  'xlsx', 'ppt', 'pptx', 'zip', 'mp3', 'mp4', 'm4a', 'wav', 'webm', 'ogg'
+]);
+
+function evidenceFileAllowed(file, bytes) {
+  const rawName = str(file?.name).toLowerCase();
+  const extMatch = rawName.match(/\.([a-z0-9]+)$/i);
+  const ext = extMatch ? extMatch[1].toLowerCase() : '';
+  if (!ext || FORBIDDEN_EVIDENCE_EXTENSIONS.has(ext) || !ALLOWED_EVIDENCE_EXTENSIONS.has(ext)) {
+    return false;
+  }
+  return mimeAllowed(file, 'file', bytes);
+}
+
+async function storeServiceEvidenceFile(env, file, serviceType, uploadedByEmail = '') {
+  if (!file || typeof file.arrayBuffer !== "function" || !file.size) {
+    throw httpError('Tệp minh chứng tải lên trống hoặc không hợp lệ.', 400);
+  }
+  const maxBytes = Number(env?.MAX_EVIDENCE_BYTES) || 15 * 1024 * 1024;
+  if (file.size > maxBytes) {
+    throw httpError(`Tệp minh chứng vượt quá giới hạn dung lượng cho phép (${Math.round(maxBytes / 1024 / 1024)}MB).`, 413, { code: 'FILE_TOO_LARGE' });
+  }
+  const fullBuffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(fullBuffer);
+  if (!evidenceFileAllowed(file, bytes.slice(0, 32))) {
+    throw httpError('Định dạng tệp minh chứng không được phép hoặc nội dung tệp không hợp lệ.', 415, { code: 'INVALID_FILE_TYPE' });
+  }
+  if (!env?.FILES) {
+    throw httpError('Kho lưu trữ minh chứng hiện chưa khả dụng.', 503, { code: 'STORAGE_UNAVAILABLE' });
+  }
+
+  const hashBuf = await crypto.subtle.digest('SHA-256', fullBuffer);
+  const sha256 = [...new Uint8Array(hashBuf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  const fileId = crypto.randomUUID();
+  const cleanFileName = safeName(file.name);
+  const r2Key = `service-evidence/${serviceType}/${new Date().toISOString().slice(0, 10)}/${fileId}-${cleanFileName}`;
+
+  await env.FILES.put(r2Key, fullBuffer, {
+    httpMetadata: { contentType: file.type || 'application/octet-stream' }
+  });
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO exam_service_files(id,service_type,request_id,r2_key,original_name,safe_name,mime_type,byte_size,sha256,uploaded_by_email,status,created_at) VALUES(?,?,NULL,?,?,?,?,?,?,?,'active',CURRENT_TIMESTAMP)`
+    ).bind(
+      fileId,
+      serviceType,
+      r2Key,
+      str(file.name).slice(0, 200),
+      cleanFileName,
+      str(file.type || 'application/octet-stream').slice(0, 120),
+      file.size,
+      sha256,
+      str(uploadedByEmail).toLowerCase().slice(0, 220)
+    ).run();
+  } catch (err) {
+    await env.FILES.delete(r2Key).catch(() => {});
+    throw httpError('Không thể ghi nhận tệp minh chứng vào cơ sở dữ liệu.', 503);
+  }
+
+  return {
+    file_id: fileId,
+    name: str(file.name).slice(0, 200),
+    mime: str(file.type || 'application/octet-stream').slice(0, 120),
+    size: file.size,
+    sha256
+  };
+}
+
+async function parseServicePayloadAndFiles(env, request, serviceType) {
+  const ctype = str(request.headers.get('content-type')).toLowerCase();
+  if (ctype.includes('multipart/form-data')) {
+    const fd = await request.formData();
+    const fields = {};
+    const uploadedFiles = [];
+    const email = str(fd.get('email')).toLowerCase();
+    for (const [k, v] of fd.entries()) {
+      if (v && typeof v === "object" && typeof v.arrayBuffer === "function") {
+        if (v.size > 0) {
+          const stored = await storeServiceEvidenceFile(env, v, serviceType, email);
+          uploadedFiles.push(stored);
+        }
+      } else {
+        fields[k] = String(v ?? '');
+      }
+    }
+    return { body: fields, uploadedFiles };
+  }
+  const body = await readJsonBody(request, 65_536);
+  const uploadedFiles = [];
+  if (Array.isArray(body.evidence_file_ids) && body.evidence_file_ids.length > 0) {
+    for (const rawId of body.evidence_file_ids.slice(0, 5)) {
+      const fid = str(rawId);
+      if (!fid) continue;
+      const row = await env.DB.prepare(
+        `SELECT id, original_name, mime_type, byte_size, sha256 FROM exam_service_files WHERE id=? AND service_type=? AND status='active'`
+      ).bind(fid, serviceType).first();
+      if (!row) {
+        throw httpError('Tệp minh chứng đính kèm không hợp lệ hoặc không tồn tại.', 400, { code: 'EVIDENCE_FILE_NOT_FOUND' });
+      }
+      uploadedFiles.push({
+        file_id: row.id,
+        name: row.original_name,
+        mime: row.mime_type,
+        size: row.byte_size,
+        sha256: row.sha256
+      });
+    }
+  }
+  return { body, uploadedFiles };
+}
+
+async function linkServiceFilesToRequest(env, uploadedFiles, requestId) {
+  for (const f of uploadedFiles) {
+    if (f?.file_id) {
+      await env.DB.prepare(`UPDATE exam_service_files SET request_id=? WHERE id=?`).bind(requestId, f.file_id).run().catch(() => {});
+    }
+  }
+}
+
+async function uploadPublicServiceFile(env, request) {
+  await ensureAdditiveSchema(env);
+  const fd = await request.formData();
+  const file = fd.get('file');
+  const serviceType = str(fd.get('service_type') || 'support');
+  const email = str(fd.get('email')).toLowerCase();
+  if (!['appeal', 'support', 'bug_report', 'emergency', 'fraud_report'].includes(serviceType)) {
+    return bad('Loại nghiệp vụ tải tệp minh chứng không hợp lệ.', 400);
+  }
+  await checkRateLimit(env, `svc_upload:${serviceType}:${email || 'anon'}`, 10, 300_000);
+  const stored = await storeServiceEvidenceFile(env, file, serviceType, email);
+  return ok({ file: stored });
+}
+
+function describeResultWorkflowStatus(workflowState, showScore, pendingManual) {
+  if (workflowState === 'revoked') {
+    return { code: 'revoked', label: 'Tạm thu hồi để rà soát theo quy chế' };
+  }
+  if (pendingManual > 0 || workflowState === 'marking') {
+    return { code: 'pending_grading', label: 'Chưa có kết quả (Đang chấm bài tự luận)' };
+  }
+  if (!showScore) {
+    return { code: 'awaiting_publication', label: 'Đang chờ công bố kết quả chính thức' };
+  }
+  if (workflowState === 'published') {
+    return { code: 'published', label: 'Đã công bố kết quả chính thức' };
+  }
+  return { code: 'graded', label: 'Đã công bố điểm bài thi' };
+}
+
 async function lookupPublicResult(env, request) {
   await ensureAdditiveSchema(env);
   const body = await readJsonBody(request, 16_384);
@@ -1305,7 +1769,7 @@ async function lookupPublicResult(env, request) {
   await checkRateLimit(env, `result_lookup:${receiptCode}`, 15, 60_000);
 
   const rec = await env.DB.prepare(`SELECT * FROM assessment_receipts WHERE UPPER(receipt_code)=?`).bind(receiptCode).first();
-  if (!rec) return bad('Không tìm thấy biên nhận phù hợp với thông tin đã nhập.', 404);
+  if (!rec) return bad('Không tìm thấy kết quả phù hợp với thông tin xác minh đã nhập.', 404);
 
   let attempt = await env.DB.prepare(
     `SELECT a.*, e.title, e.show_score, e.result_policy, e.result_release_at, e.closes_at, e.status exam_status, e.passing_score, COALESCE(a.question_snapshot_json, e.question_json) question_json, 'guest' source FROM exam_guest_attempts a JOIN exams e ON e.id=a.exam_id WHERE a.id=? AND LOWER(a.candidate_code)=LOWER(?)`
@@ -1316,12 +1780,13 @@ async function lookupPublicResult(env, request) {
       `SELECT a.*, u.full_name, u.sfn_id candidate_code, c.name class_name, e.title, e.show_score, e.result_policy, e.result_release_at, e.closes_at, e.status exam_status, e.passing_score, COALESCE(a.question_snapshot_json, e.question_json) question_json, 'internal' source FROM exam_attempts a JOIN users u ON u.id=a.user_id JOIN exams e ON e.id=a.exam_id LEFT JOIN classes c ON c.id=e.class_id WHERE a.id=? AND LOWER(u.sfn_id)=LOWER(?)`
     ).bind(rec.attempt_id, candidateCode).first();
   }
-  if (!attempt) return bad('Không tìm thấy biên nhận phù hợp với thông tin đã nhập.', 404);
+  if (!attempt) return bad('Không tìm thấy kết quả phù hợp với thông tin xác minh đã nhập.', 404);
 
   const f = await finalResponse(env, attempt);
   const passed = f.show_score && f.score != null && Number(attempt.passing_score || 0) > 0
     ? Number(f.score) >= Number(attempt.passing_score)
     : null;
+  const statusInfo = describeResultWorkflowStatus(f.workflow_state, f.show_score, f.pending_manual);
 
   return ok({
     result: {
@@ -1334,69 +1799,555 @@ async function lookupPublicResult(env, request) {
       class_name: attempt.class_name || '',
       submitted_at: attempt.submitted_at,
       workflow_state: f.workflow_state,
+      result_status_code: statusInfo.code,
+      result_status_label: statusInfo.label,
       show_score: f.show_score,
       score: f.score,
       max_score: f.max_score,
       passing_score: attempt.passing_score || 0,
       passed,
-      pending_manual: f.pending_manual
+      pending_manual: f.pending_manual,
+      appeal_available: true,
+      appeal_url: `/phuc-khao?receipt_code=${encodeURIComponent(rec.receipt_code)}&candidate_code=${encodeURIComponent(attempt.candidate_code)}&exam_title=${encodeURIComponent(attempt.title)}`,
+      appeal_guide: 'Nếu có thắc mắc về kết quả chấm thi, thí sinh có thể gửi yêu cầu phúc khảo tại trang Phúc khảo (/phuc-khao) kèm theo Mã biên nhận và Mã thí sinh.'
     }
   });
 }
 
 async function submitPublicAppeal(env, request) {
   await ensureAdditiveSchema(env);
-  const body = await readJsonBody(request, 32_768);
+  const { body, uploadedFiles } = await parseServicePayloadAndFiles(env, request, 'appeal');
   const receiptCode = str(body.receipt_code).toUpperCase();
-  const candidateCode = str(body.candidate_code);
-  const candidateEmail = str(body.email).toLowerCase();
+  const candidateCode = str(body.candidate_code).slice(0, 100);
+  const candidateEmail = str(body.email).toLowerCase().slice(0, 220);
   const reason = str(body.reason).slice(0, 4000);
-  if (!receiptCode || !candidateCode || !reason || reason.length < 10) {
-    return bad('Vui lòng nhập Mã biên nhận, Mã thí sinh và Lý do phúc khảo (tối thiểu 10 ký tự).', 400);
+  const isStrictForm = Boolean(body.strict_form === '1' || body.strict_form === true || body.phone !== undefined);
+
+  if (!candidateCode || !candidateEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidateEmail) || !reason || reason.length < 10) {
+    return bad('Vui lòng nhập đầy đủ Email hợp lệ, Mã thí sinh và Nội dung lý do phúc khảo (tối thiểu 10 ký tự).', 400);
   }
-  await checkRateLimit(env, `appeal:${receiptCode}`, 5, 300_000);
-
-  const rec = await env.DB.prepare(`SELECT * FROM assessment_receipts WHERE UPPER(receipt_code)=?`).bind(receiptCode).first();
-  if (!rec) return bad('Thông tin biên nhận không hợp lệ.', 404);
-
-  let attempt = await env.DB.prepare(`SELECT id, exam_id, score, candidate_code FROM exam_guest_attempts WHERE id=? AND LOWER(candidate_code)=LOWER(?)`).bind(rec.attempt_id, candidateCode).first();
-  if (!attempt) {
-    attempt = await env.DB.prepare(`SELECT a.id, a.exam_id, a.score, u.sfn_id candidate_code FROM exam_attempts a JOIN users u ON u.id=a.user_id WHERE a.id=? AND LOWER(u.sfn_id)=LOWER(?)`).bind(rec.attempt_id, candidateCode).first();
+  if (isStrictForm) {
+    if (!str(body.full_name) || !str(body.phone) || !str(body.class_name) || !str(body.exam_title) || !str(body.exam_date)) {
+      return bad('Vui lòng điền đầy đủ các trường bắt buộc: Họ và tên, Số điện thoại, Địa chỉ email, Mã lớp, Mã thí sinh, Tên kỳ thi, Ngày dự thi và Lý do phúc khảo.', 400);
+    }
   }
-  if (!attempt) return bad('Thông tin biên nhận và mã thí sinh không khớp.', 404);
 
-  const existing = await env.DB.prepare(`SELECT id FROM exam_appeals WHERE attempt_id=? AND status IN ('pending','reviewing')`).bind(attempt.id).first();
-  if (existing) return bad('Yêu cầu phúc khảo cho bài thi này đang được xử lý.', 409);
+  await checkRateLimit(env, `appeal:${receiptCode || candidateCode}`, 5, 300_000);
+
+  let attempt = null;
+  if (receiptCode) {
+    const rec = await env.DB.prepare(`SELECT * FROM assessment_receipts WHERE UPPER(receipt_code)=?`).bind(receiptCode).first();
+    if (!rec) return bad('Thông tin biên nhận không hợp lệ.', 404);
+    attempt = await env.DB.prepare(
+      `SELECT a.id, a.exam_id, a.score, a.candidate_code, a.full_name, a.class_name, a.submitted_at, e.title exam_title FROM exam_guest_attempts a JOIN exams e ON e.id=a.exam_id WHERE a.id=? AND LOWER(a.candidate_code)=LOWER(?)`
+    ).bind(rec.attempt_id, candidateCode).first();
+    if (!attempt) {
+      attempt = await env.DB.prepare(
+        `SELECT a.id, a.exam_id, a.score, u.sfn_id candidate_code, u.full_name, c.name class_name, a.submitted_at, e.title exam_title FROM exam_attempts a JOIN users u ON u.id=a.user_id JOIN exams e ON e.id=a.exam_id LEFT JOIN classes c ON c.id=e.class_id WHERE a.id=? AND LOWER(u.sfn_id)=LOWER(?)`
+      ).bind(rec.attempt_id, candidateCode).first();
+    }
+    if (!attempt) return bad('Thông tin biên nhận và mã thí sinh không khớp.', 404);
+  } else {
+    attempt = await env.DB.prepare(
+      `SELECT a.id, a.exam_id, a.score, a.candidate_code, a.full_name, a.class_name, a.submitted_at, e.title exam_title FROM exam_guest_attempts a JOIN exams e ON e.id=a.exam_id WHERE LOWER(a.candidate_code)=LOWER(?) ORDER BY a.submitted_at DESC LIMIT 1`
+    ).bind(candidateCode).first();
+    if (!attempt) {
+      return bad('Vui lòng cung cấp Mã biên nhận hợp lệ hoặc Mã thí sinh có bài thi đã nộp trên hệ thống.', 404);
+    }
+  }
+
+  const existing = await env.DB.prepare(`SELECT id, request_code FROM exam_appeals WHERE attempt_id=? AND status IN ('pending','received','reviewing','need_more_info')`).bind(attempt.id).first();
+  if (existing) return bad('Yêu cầu phúc khảo cho bài thi này đang được xử lý.', 409, { request_code: existing.request_code || existing.id });
 
   const id = crypto.randomUUID();
-  await env.DB.prepare(
-    `INSERT INTO exam_appeals(id,attempt_id,exam_id,candidate_email,candidate_code,reason,status,score_before,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
-  ).bind(id, attempt.id, attempt.exam_id, candidateEmail, candidateCode, reason, attempt.score).run();
+  const requestCode = generateRequestCode('PK');
+  const fullName = str(body.full_name || attempt.full_name || '').slice(0, 160);
+  const phone = str(body.phone || '').slice(0, 40);
+  const className = str(body.class_name || attempt.class_name || '').slice(0, 160);
+  const examTitle = str(body.exam_title || attempt.exam_title || '').slice(0, 240);
+  const examDate = str(body.exam_date || attempt.submitted_at || '').slice(0, 80);
+  const history = [{ status: 'received', label: 'Đã tiếp nhận', at: nowIso(), by: 'system' }];
 
-  await recordAudit(env, { examId: attempt.exam_id, attemptId: attempt.id, eventType: 'appeal.submitted', detail: { appeal_id: id, candidate_code: candidateCode } });
-  return ok({ appeal_id: id, status: 'pending', message: 'Đã ghi nhận đơn phúc khảo của bạn.' });
+  await env.DB.prepare(
+    `INSERT INTO exam_appeals(id,request_code,attempt_id,exam_id,full_name,phone,candidate_email,class_name,candidate_code,exam_title,exam_date,receipt_code,reason,evidence_files_json,status,score_before,history_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
+  ).bind(
+    id, requestCode, attempt.id, attempt.exam_id, fullName, phone, candidateEmail, className,
+    candidateCode, examTitle, examDate, receiptCode, reason, JSON.stringify(uploadedFiles),
+    attempt.score, JSON.stringify(history)
+  ).run();
+
+  await linkServiceFilesToRequest(env, uploadedFiles, id);
+  await recordAudit(env, {
+    examId: attempt.exam_id,
+    attemptId: attempt.id,
+    eventType: 'appeal.submitted',
+    detail: { appeal_id: id, request_code: requestCode, candidate_code: candidateCode, evidence_count: uploadedFiles.length }
+  });
+
+  let emailStatus = { delivered: false, status: 'skipped' };
+  if (env?.SEND_LIFECYCLE_EMAILS === '1' || env?.EMAIL_API_URL || isStrictForm) {
+    emailStatus = await dispatchEventEmail(env, 'appeal_received', {
+      to: candidateEmail,
+      examId: attempt.exam_id,
+      attemptId: attempt.id,
+      requestId: id,
+      idempotencyKey: `appeal-received:${id}`,
+      throwOnProviderError: false,
+      data: {
+        recipient_name: fullName || candidateCode,
+        request_code: requestCode,
+        receipt_code: receiptCode,
+        exam_title: examTitle,
+        candidate_code: candidateCode,
+        class_name: className,
+        exam_date: examDate,
+        status_label: 'Đã tiếp nhận',
+        reason
+      }
+    });
+  }
+
+  return ok({
+    appeal_id: id,
+    request_code: requestCode,
+    status: 'pending',
+    status_label: 'Đã tiếp nhận',
+    email_sent: emailStatus.delivered,
+    email_status: emailStatus.status,
+    message: `Đã tiếp nhận yêu cầu phúc khảo của bạn. Mã yêu cầu: ${requestCode}.`
+  });
+}
+
+async function trackPublicAppeal(env, request) {
+  await ensureAdditiveSchema(env);
+  const body = await readJsonBody(request, 16_384);
+  const requestCode = str(body.request_code).toUpperCase();
+  const candidateCode = str(body.candidate_code);
+  const email = str(body.email).toLowerCase();
+  if (!requestCode || (!candidateCode && !email)) {
+    return bad('Vui lòng nhập Mã yêu cầu phúc khảo kèm theo Mã thí sinh hoặc Email đã đăng ký để tra cứu.', 400);
+  }
+  await checkRateLimit(env, `appeal_track:${requestCode}`, 15, 60_000);
+
+  const row = await env.DB.prepare(
+    `SELECT * FROM exam_appeals WHERE (UPPER(request_code)=? OR id=?) LIMIT 1`
+  ).bind(requestCode, requestCode.toLowerCase()).first();
+
+  if (!row) return bad('Không tìm thấy hồ sơ phúc khảo phù hợp với thông tin xác minh.', 404);
+  const matchCode = candidateCode && str(row.candidate_code).toLowerCase() === candidateCode.toLowerCase();
+  const matchEmail = email && str(row.candidate_email).toLowerCase() === email.toLowerCase();
+  if (!matchCode && !matchEmail) {
+    return bad('Không tìm thấy hồ sơ phúc khảo phù hợp với thông tin xác minh.', 404);
+  }
+
+  const statusMap = {
+    pending: 'Đã tiếp nhận',
+    received: 'Đã tiếp nhận',
+    reviewing: 'Đang xem xét',
+    need_more_info: 'Cần bổ sung thông tin',
+    resolved: 'Đã giải quyết',
+    rejected: 'Từ chối với lý do phù hợp'
+  };
+
+  return ok({
+    appeal: {
+      request_code: row.request_code || row.id,
+      exam_title: row.exam_title || row.exam_id,
+      candidate_code: row.candidate_code,
+      class_name: row.class_name || '',
+      exam_date: row.exam_date || '',
+      receipt_code: row.receipt_code || '',
+      status: row.status === 'pending' ? 'received' : row.status,
+      status_label: statusMap[row.status] || row.status,
+      score_before: row.score_before,
+      score_after: ['resolved', 'rejected'].includes(row.status) ? row.score_after : null,
+      resolution_note: row.resolution_note || '',
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      resolved_at: row.resolved_at || null
+    }
+  });
 }
 
 async function submitSupportRequest(env, request) {
   await ensureAdditiveSchema(env);
-  const body = await readJsonBody(request, 32_768);
+  const { body, uploadedFiles } = await parseServicePayloadAndFiles(env, request, 'support');
   const candidateName = str(body.full_name).slice(0, 160);
+  const phone = str(body.phone || '').slice(0, 40);
   const candidateEmail = str(body.email).toLowerCase().slice(0, 220);
+  const className = str(body.class_name || '').slice(0, 160);
   const candidateCode = str(body.candidate_code).slice(0, 100);
   const examId = str(body.exam_id).slice(0, 100) || null;
+  const examTitle = str(body.exam_title || body.exam_id || '').slice(0, 240);
+  const examDate = str(body.exam_date || body.incident_date || '').slice(0, 80);
   const attemptId = str(body.attempt_id).slice(0, 100) || null;
-  const issueType = str(body.issue_type || 'technical').slice(0, 60);
+  const issueType = str(body.issue_type || 'general_support').slice(0, 60);
   const message = str(body.message).slice(0, 4000);
+  const isStrictForm = Boolean(body.strict_form === '1' || body.strict_form === true || body.phone !== undefined);
+
   if (!candidateName || !message) {
     return bad('Vui lòng nhập họ tên và nội dung cần hỗ trợ.', 400);
   }
+  if (isStrictForm) {
+    if (!phone || !candidateEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidateEmail) || !className) {
+      return bad('Vui lòng điền đầy đủ Họ và tên, Số điện thoại, Địa chỉ email, Mã lớp và Nội dung cần hỗ trợ.', 400);
+    }
+  }
+
   await checkRateLimit(env, `support:${candidateCode || candidateEmail || 'anon'}`, 5, 300_000);
   const id = crypto.randomUUID();
+  const requestCode = generateRequestCode('HT');
+  const history = [{ status: 'open', label: 'Đã tiếp nhận', at: nowIso(), by: 'system' }];
+
   await env.DB.prepare(
-    `INSERT INTO exam_support_requests(id,exam_id,attempt_id,candidate_name,candidate_email,candidate_code,issue_type,message,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'open',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
-  ).bind(id, examId, attemptId, candidateName, candidateEmail, candidateCode, issueType, message).run();
-  await recordAudit(env, { examId, attemptId, eventType: 'support.requested', detail: { support_id: id, issue_type: issueType } });
-  return ok({ support_id: id, status: 'open', message: 'Yêu cầu hỗ trợ đã được chuyển tới hội đồng coi thi.' });
+    `INSERT INTO exam_support_requests(id,request_code,exam_id,attempt_id,candidate_name,phone,candidate_email,class_name,candidate_code,exam_title,exam_date,category,issue_type,message,evidence_files_json,history_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'support',?,?,?,?, 'open',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
+  ).bind(
+    id, requestCode, examId, attemptId, candidateName, phone, candidateEmail,
+    className, candidateCode, examTitle, examDate, issueType, message,
+    JSON.stringify(uploadedFiles), JSON.stringify(history)
+  ).run();
+
+  await linkServiceFilesToRequest(env, uploadedFiles, id);
+  await recordAudit(env, {
+    examId,
+    attemptId,
+    eventType: 'support.requested',
+    detail: { support_id: id, request_code: requestCode, category: 'support', issue_type: issueType }
+  });
+
+  let emailStatus = { delivered: false, status: 'skipped' };
+  if (candidateEmail && (env?.SEND_LIFECYCLE_EMAILS === '1' || env?.EMAIL_API_URL || isStrictForm)) {
+    emailStatus = await dispatchEventEmail(env, 'support_request_received', {
+      to: candidateEmail,
+      examId,
+      attemptId,
+      requestId: id,
+      idempotencyKey: `support-received:${id}`,
+      throwOnProviderError: false,
+      data: {
+        recipient_name: candidateName,
+        request_code: requestCode,
+        exam_title: examTitle,
+        candidate_code: candidateCode,
+        class_name: className,
+        exam_date: examDate,
+        status_label: 'Đã tiếp nhận',
+        reason: message
+      }
+    });
+  }
+
+  return ok({
+    support_id: id,
+    request_code: requestCode,
+    status: 'open',
+    status_label: 'Đã tiếp nhận',
+    email_sent: emailStatus.delivered,
+    email_status: emailStatus.status,
+    message: `Yêu cầu hỗ trợ đã được ghi nhận. Mã yêu cầu: ${requestCode}.`
+  });
+}
+
+async function submitBugReport(env, request) {
+  await ensureAdditiveSchema(env);
+  const { body, uploadedFiles } = await parseServicePayloadAndFiles(env, request, 'bug_report');
+  const fullName = str(body.full_name).slice(0, 160);
+  const phone = str(body.phone).slice(0, 40);
+  const email = str(body.email).toLowerCase().slice(0, 220);
+  const className = str(body.class_name).slice(0, 160);
+  const candidateCode = str(body.candidate_code).slice(0, 100);
+  const examTitle = str(body.exam_title).slice(0, 240);
+  const examDate = str(body.exam_date).slice(0, 80);
+  const occurredAt = str(body.occurred_at).slice(0, 100);
+  const message = str(body.message || body.description).slice(0, 4000);
+
+  if (!fullName || !phone || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !className || !candidateCode || !examTitle || !examDate || !occurredAt || !message) {
+    return bad('Vui lòng điền đầy đủ các trường bắt buộc: Họ và tên, Số điện thoại, Email, Mã lớp, Mã thí sinh, Kỳ thi, Ngày dự thi, Thời điểm xảy ra lỗi và Mô tả lỗi.', 400);
+  }
+  await checkRateLimit(env, `bug_report:${candidateCode}:${email}`, 5, 300_000);
+
+  // Data minimization: store only safe technical fields, never store tokens/passwords/OTP
+  const techMeta = {
+    browser: str(body.browser_info || '').slice(0, 180),
+    device: str(body.device_info || '').slice(0, 120),
+    error_code: str(body.error_code || '').slice(0, 80)
+  };
+
+  const id = crypto.randomUUID();
+  const requestCode = generateRequestCode('BL');
+  const history = [{ status: 'open', label: 'Đã tiếp nhận báo lỗi kỹ thuật', at: nowIso(), by: 'system' }];
+
+  await env.DB.prepare(
+    `INSERT INTO exam_support_requests(id,request_code,exam_id,attempt_id,candidate_name,phone,candidate_email,class_name,candidate_code,exam_title,exam_date,occurred_at,category,issue_type,message,technical_meta_json,evidence_files_json,history_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'bug_report','bug_report',?,?,?,?, 'open',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
+  ).bind(
+    id, requestCode, str(body.exam_id || '') || null, str(body.attempt_id || '') || null,
+    fullName, phone, email, className, candidateCode, examTitle, examDate, occurredAt,
+    message, JSON.stringify(techMeta), JSON.stringify(uploadedFiles), JSON.stringify(history)
+  ).run();
+
+  await linkServiceFilesToRequest(env, uploadedFiles, id);
+  await recordAudit(env, {
+    examId: str(body.exam_id || '') || null,
+    attemptId: str(body.attempt_id || '') || null,
+    eventType: 'bug_report.submitted',
+    detail: { support_id: id, request_code: requestCode, candidate_code: candidateCode, evidence_count: uploadedFiles.length }
+  });
+
+  const emailStatus = await dispatchEventEmail(env, 'technical_incident', {
+    to: email,
+    requestId: id,
+    idempotencyKey: `bug-report:${id}`,
+    throwOnProviderError: false,
+    data: {
+      recipient_name: fullName,
+      request_code: requestCode,
+      exam_title: examTitle,
+      candidate_code: candidateCode,
+      class_name: className,
+      event_time: `${examDate} · ${occurredAt}`,
+      status_label: 'Đã tiếp nhận báo lỗi kỹ thuật',
+      reason: message
+    }
+  });
+
+  return ok({
+    report_id: id,
+    request_code: requestCode,
+    status: 'open',
+    status_label: 'Đã tiếp nhận',
+    email_sent: emailStatus.delivered,
+    email_status: emailStatus.status,
+    message: `Đã tiếp nhận báo cáo lỗi kỹ thuật của bạn. Mã yêu cầu: ${requestCode}.`
+  });
+}
+
+async function submitEmergencyIncident(env, request) {
+  await ensureAdditiveSchema(env);
+  const { body, uploadedFiles } = await parseServicePayloadAndFiles(env, request, 'emergency');
+  const fullName = str(body.full_name).slice(0, 160);
+  const phone = str(body.phone).slice(0, 40);
+  const email = str(body.email).toLowerCase().slice(0, 220);
+  const className = str(body.class_name).slice(0, 160);
+  const candidateCode = str(body.candidate_code).slice(0, 100);
+  const examTitle = str(body.exam_title).slice(0, 240);
+  const occurredAt = str(body.occurred_at).slice(0, 100);
+  const message = str(body.message || body.description).slice(0, 4000);
+  const attemptId = str(body.attempt_id || '').slice(0, 100) || null;
+  const examId = str(body.exam_id || '').slice(0, 100) || null;
+
+  if (!fullName || !phone || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !className || !candidateCode || !examTitle || !occurredAt || !message) {
+    return bad('Vui lòng điền đầy đủ các trường bắt buộc: Họ và tên, Số điện thoại, Email, Mã lớp, Mã thí sinh, Tên kỳ thi, Ngày và thời điểm xảy ra sự cố, và Mô tả sự cố.', 400);
+  }
+  await checkRateLimit(env, `emergency:${candidateCode}:${email}`, 8, 300_000);
+
+  const id = crypto.randomUUID();
+  const requestCode = generateRequestCode('KC');
+  const history = [{ status: 'open', label: 'Đã tiếp nhận báo cáo sự cố phiên thi', at: nowIso(), by: 'system' }];
+
+  await env.DB.prepare(
+    `INSERT INTO exam_support_requests(id,request_code,exam_id,attempt_id,candidate_name,phone,candidate_email,class_name,candidate_code,exam_title,exam_date,occurred_at,category,issue_type,message,evidence_files_json,history_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'emergency_incident','emergency',?,?,?,'open',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
+  ).bind(
+    id, requestCode, examId, attemptId, fullName, phone, email, className,
+    candidateCode, examTitle, occurredAt, occurredAt, message,
+    JSON.stringify(uploadedFiles), JSON.stringify(history)
+  ).run();
+
+  await linkServiceFilesToRequest(env, uploadedFiles, id);
+  await recordAudit(env, {
+    examId,
+    attemptId,
+    eventType: 'emergency_incident.submitted',
+    detail: { support_id: id, request_code: requestCode, candidate_code: candidateCode, attempt_id: attemptId }
+  });
+
+  const emailStatus = await dispatchEventEmail(env, 'technical_incident', {
+    to: email,
+    examId,
+    attemptId,
+    requestId: id,
+    idempotencyKey: `emergency:${id}`,
+    throwOnProviderError: false,
+    data: {
+      recipient_name: fullName,
+      request_code: requestCode,
+      exam_title: examTitle,
+      candidate_code: candidateCode,
+      class_name: className,
+      attempt_id: attemptId || '',
+      event_time: occurredAt,
+      status_label: 'Đã ghi nhận sự cố phiên thi',
+      reason: message
+    }
+  });
+
+  return ok({
+    incident_id: id,
+    request_code: requestCode,
+    status: 'open',
+    status_label: 'Đã tiếp nhận',
+    email_sent: emailStatus.delivered,
+    email_status: emailStatus.status,
+    message: `Hệ thống đã ghi nhận báo cáo sự cố khẩn cấp. Mã yêu cầu: ${requestCode}.`
+  });
+}
+
+async function trackPublicSupportRequest(env, request) {
+  await ensureAdditiveSchema(env);
+  const body = await readJsonBody(request, 16_384);
+  const requestCode = str(body.request_code).toUpperCase();
+  const email = str(body.email).toLowerCase();
+  if (!requestCode || !email) {
+    return bad('Vui lòng nhập Mã yêu cầu và Địa chỉ email đã dùng khi gửi yêu cầu để tra cứu.', 400);
+  }
+  await checkRateLimit(env, `support_track:${requestCode}`, 15, 60_000);
+
+  const row = await env.DB.prepare(
+    `SELECT * FROM exam_support_requests WHERE (UPPER(request_code)=? OR id=?) AND LOWER(candidate_email)=? LIMIT 1`
+  ).bind(requestCode, requestCode.toLowerCase(), email).first();
+
+  if (!row) return bad('Không tìm thấy yêu cầu phù hợp với Mã yêu cầu và Email đã nhập.', 404);
+  const statusMap = {
+    open: 'Đã tiếp nhận · Đang chờ xử lý',
+    in_progress: 'Đang xem xét xử lý',
+    need_more_info: 'Cần bổ sung thông tin',
+    resolved: 'Đã giải quyết'
+  };
+  return ok({
+    request: {
+      request_code: row.request_code || row.id,
+      category: row.category || 'support',
+      exam_title: row.exam_title || row.exam_id || '',
+      candidate_code: row.candidate_code || '',
+      class_name: row.class_name || '',
+      occurred_at: row.occurred_at || row.exam_date || '',
+      status: row.status,
+      status_label: statusMap[row.status] || row.status,
+      resolution_note: row.resolution_note || '',
+      created_at: row.created_at,
+      updated_at: row.updated_at
+    }
+  });
+}
+
+async function submitFraudReport(env, request) {
+  await ensureAdditiveSchema(env);
+  const { body, uploadedFiles } = await parseServicePayloadAndFiles(env, request, 'fraud_report');
+  const reporterName = str(body.reporter_name || body.full_name).slice(0, 160);
+  const reporterPhone = str(body.phone || body.reporter_phone).slice(0, 40);
+  const reporterEmail = str(body.email || body.reporter_email).toLowerCase().slice(0, 220);
+  const className = str(body.class_name).slice(0, 160);
+  const examTitle = str(body.exam_title).slice(0, 240);
+  const examDate = str(body.exam_date).slice(0, 80);
+  const content = str(body.content || body.message).slice(0, 5000);
+  const reportedCandidateCode = str(body.reported_candidate_code || '').slice(0, 100);
+  const reportedInfo = str(body.reported_info || '').slice(0, 500);
+  const rawEvidenceUrl = str(body.evidence_url || '').slice(0, 1000);
+
+  if (!reporterName || !reporterPhone || !reporterEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reporterEmail) || !className || !examTitle || !examDate || !content || content.length < 15) {
+    return bad('Vui lòng điền đầy đủ các trường bắt buộc: Họ và tên người tố cáo, Số điện thoại, Email, Mã lớp, Tên kỳ thi, Ngày diễn ra phiên thi và Nội dung mô tả sự việc (tối thiểu 15 ký tự).', 400);
+  }
+
+  let validEvidenceUrl = '';
+  if (rawEvidenceUrl) {
+    try {
+      const parsed = new URL(rawEvidenceUrl);
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        return bad('Đường dẫn minh chứng phải bắt đầu bằng http:// hoặc https://.', 400, { code: 'INVALID_EVIDENCE_URL' });
+      }
+      validEvidenceUrl = parsed.href;
+    } catch {
+      return bad('Đường dẫn bài viết / nội dung minh chứng không hợp lệ.', 400, { code: 'INVALID_EVIDENCE_URL' });
+    }
+  }
+
+  if (uploadedFiles.length === 0 && !validEvidenceUrl) {
+    return bad('Bắt buộc phải cung cấp ít nhất một hình thức minh chứng hợp lệ (tải lên ảnh chụp màn hình/tài liệu minh chứng hoặc nhập đường dẫn liên quan hợp lệ).', 400, {
+      code: 'EVIDENCE_REQUIRED'
+    });
+  }
+
+  await checkRateLimit(env, `fraud_report:${reporterEmail}`, 5, 600_000);
+
+  const id = crypto.randomUUID();
+  const requestCode = generateRequestCode('TC');
+  const history = [{ status: 'received', label: 'Đã tiếp nhận thông tin phản ánh để xác minh', at: nowIso(), by: 'system' }];
+
+  await env.DB.prepare(
+    `INSERT INTO exam_fraud_reports(id,request_code,reporter_name,reporter_phone,reporter_email,class_name,exam_id,exam_title,exam_date,reported_candidate_code,reported_info,content,evidence_url,evidence_files_json,status,history_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'received',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
+  ).bind(
+    id, requestCode, reporterName, reporterPhone, reporterEmail, className,
+    str(body.exam_id || '') || null, examTitle, examDate,
+    reportedCandidateCode, reportedInfo, content, validEvidenceUrl,
+    JSON.stringify(uploadedFiles), JSON.stringify(history)
+  ).run();
+
+  await linkServiceFilesToRequest(env, uploadedFiles, id);
+  // Principle VI & IV.6: Fraud report is strictly an information source for verification; never auto-penalize or auto-lock reported candidate!
+  await recordAudit(env, {
+    examId: str(body.exam_id || '') || null,
+    eventType: 'fraud_report.received',
+    detail: { report_id: id, request_code: requestCode, exam_title: examTitle, has_files: uploadedFiles.length > 0, has_url: Boolean(validEvidenceUrl) }
+  });
+
+  const emailStatus = await dispatchEventEmail(env, 'fraud_report', {
+    to: reporterEmail,
+    requestId: id,
+    idempotencyKey: `fraud-report:${id}`,
+    throwOnProviderError: false,
+    data: {
+      recipient_name: reporterName,
+      request_code: requestCode,
+      exam_title: examTitle,
+      class_name: className,
+      exam_date: examDate,
+      status_label: 'Đã tiếp nhận để xác minh theo quy chế'
+    }
+  });
+
+  return ok({
+    report_id: id,
+    request_code: requestCode,
+    status: 'received',
+    status_label: 'Đã tiếp nhận để xác minh',
+    email_sent: emailStatus.delivered,
+    email_status: emailStatus.status,
+    message: `Hệ thống đã tiếp nhận phản ánh của bạn và cấp mã tiếp nhận: ${requestCode}. Thông tin người phản ánh được bảo mật tuyệt đối.`
+  });
+}
+
+async function trackPublicFraudReport(env, request) {
+  await ensureAdditiveSchema(env);
+  const body = await readJsonBody(request, 16_384);
+  const requestCode = str(body.request_code).toUpperCase();
+  const email = str(body.email).toLowerCase();
+  if (!requestCode || !email) {
+    return bad('Vui lòng nhập Mã tiếp nhận và Email người gửi để tra cứu trạng thái tiếp nhận.', 400);
+  }
+  await checkRateLimit(env, `fraud_track:${requestCode}`, 10, 60_000);
+
+  const row = await env.DB.prepare(
+    `SELECT request_code, exam_title, exam_date, status, resolution_note, created_at, updated_at FROM exam_fraud_reports WHERE UPPER(request_code)=? AND LOWER(reporter_email)=? LIMIT 1`
+  ).bind(requestCode, email).first();
+
+  if (!row) return bad('Không tìm thấy hồ sơ phản ánh phù hợp với thông tin xác minh.', 404);
+  const statusMap = {
+    received: 'Đã tiếp nhận · Đang chờ Hội đồng xác minh',
+    verifying: 'Đang xác minh theo quy chế',
+    verified: 'Đã hoàn tất xác minh và xử lý theo thẩm quyền',
+    dismissed: 'Đã rà soát và lưu hồ sơ (chưa đủ căn cứ kết luận vi phạm)'
+  };
+  return ok({
+    report: {
+      request_code: row.request_code,
+      exam_title: row.exam_title,
+      exam_date: row.exam_date,
+      status: row.status,
+      status_label: statusMap[row.status] || row.status,
+      resolution_note: row.resolution_note || '',
+      created_at: row.created_at,
+      updated_at: row.updated_at
+    }
+  });
 }
 
 // =============================================================================
@@ -1478,7 +2429,10 @@ async function authorizeAdmin(env, request, requiredPermission = null) {
 
 async function adminBootstrap(env, request) {
   await ensureAdditiveSchema(env);
-  const setupToken = str(env?.ADMIN_BOOTSTRAP_TOKEN || env?.SETUP_TOKEN || 'SKYFIRST-2026-ADMIN');
+  const setupToken = str(env?.ADMIN_BOOTSTRAP_TOKEN || env?.SETUP_TOKEN);
+  if (!setupToken) {
+    return bad('Chức năng khởi tạo quản trị viên chưa được cấu hình khóa bảo mật ở phía máy chủ.', 403, { code: 'BOOTSTRAP_NOT_CONFIGURED' });
+  }
   await checkRateLimit(env, 'admin_bootstrap_attempt', 5, 10 * 60 * 1000);
   const body = await readJsonBody(request, 16_384);
   const email = str(body.email).toLowerCase();
@@ -1572,11 +2526,16 @@ async function requestAdminOtp(env, request) {
     `INSERT INTO exam_otp_challenges(id,email,purpose,scope_id,otp_hash,attempts,max_attempts,expires_at,created_at) VALUES(?,?,'admin_login','admin',?,0,5,?,CURRENT_TIMESTAMP)`
   ).bind(challengeId, email, otpHash, expiresAt).run();
 
-  const mailResult = await dispatchBusinessEmail(env, {
+  const mailResult = await dispatchEventEmail(env, 'login_verification_code', {
     to: email,
-    subject: `[Sky First EXAM] Mã OTP đăng nhập Quản trị (/admin)`,
-    text: `Mã OTP đăng nhập hệ thống quản trị EXAM của bạn là: ${otp}. Mã có hiệu lực trong 5 phút và chỉ dùng một lần.`,
-    html: `<p>Xin chào <b>${user.full_name || email}</b>,</p><p>Mã OTP đăng nhập hệ thống quản trị EXAM của bạn là: <strong style="font-size:18px">${otp}</strong></p><p>Mã có hiệu lực trong 5 phút và chỉ dùng một lần. Tuyệt đối không chia sẻ mã này.</p>`
+    idempotencyKey: `admin-otp:${challengeId}`,
+    throwOnProviderError: true,
+    data: {
+      recipient_name: user.full_name || email,
+      otp_code: otp,
+      expires_minutes: 5,
+      status_label: 'Xác thực đăng nhập hệ thống'
+    }
   });
 
   await recordAudit(env, {
@@ -1845,7 +2804,7 @@ async function adminCreateOrUpdateExam(env, examId, request, isCreate = false) {
   const showScore = body.show_score !== undefined ? (body.show_score ? 1 : 0) : Number(existing?.show_score ?? 1);
   const assessmentType = str(body.assessment_type ?? existing?.assessment_type ?? 'assessment');
   const assessmentLabel = str(body.assessment_label ?? existing?.assessment_label ?? 'Đánh giá năng lực');
-  const centerLabel = str(body.center_label ?? existing?.center_label ?? 'TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST');
+  const centerLabel = str(body.center_label ?? existing?.center_label ?? 'Hệ Thống Khảo Thí Và Đánh Giá Sky First');
   const resultPolicy = str(body.result_policy ?? existing?.result_policy ?? 'score_after_submit');
   const resultReleaseAt = body.result_release_at !== undefined ? (str(body.result_release_at) || null) : (existing?.result_release_at || null);
   const opensAt = body.opens_at !== undefined ? (str(body.opens_at) || null) : (existing?.opens_at || null);
@@ -2142,6 +3101,23 @@ async function adminEnrollCandidate(env, request) {
     eventType: 'candidate.enrollment.upserted',
     detail: { email, candidate_code: candidateCode, status }
   });
+  if (status === 'revoked' && str(body.decision_code) && (env?.SEND_LIFECYCLE_EMAILS === '1' || env?.EMAIL_API_URL || body.notify_email)) {
+    await dispatchEventEmail(env, 'exam_ban_notice', {
+      to: email,
+      examId,
+      idempotencyKey: `ban:${examId}:${email}:${str(body.decision_code)}`,
+      throwOnProviderError: false,
+      data: {
+        recipient_name: fullName,
+        exam_title: exam.title,
+        candidate_code: candidateCode,
+        class_name: className,
+        request_code: str(body.decision_code),
+        status_label: 'Thu hồi quyền dự thi theo quyết định xử lý vi phạm',
+        reason: str(body.notes || body.reason || 'Xử lý theo quy chế khảo thí')
+      }
+    }).catch(() => {});
+  }
   return ok({ enrolled: true, exam_id: examId, email, candidate_code: candidateCode, status });
 }
 
@@ -2279,6 +3255,30 @@ async function adminProctorAction(env, attemptId, request) {
     await env.DB.prepare(`DELETE FROM assessment_attempt_leases WHERE attempt_id=?`).bind(attemptId).run();
     await recordAudit(env, { examId: row.exam_id, attemptId, actorUserId: admin.user_id, eventType: 'attempt.lease_released', detail: { reason, source } });
     return ok({ attempt_id: attemptId, lease_released: true });
+  }
+  if (action === 'cancel') {
+    await env.DB.prepare(`UPDATE ${table} SET status='cancelled', lock_reason=? WHERE id=?`).bind(reason, attemptId).run();
+    await recordAudit(env, { examId: row.exam_id, attemptId, actorUserId: admin.user_id, eventType: 'attempt.cancelled', detail: { reason, source } });
+    if (row.email && (env?.SEND_LIFECYCLE_EMAILS === '1' || env?.EMAIL_API_URL || body.notify_email)) {
+      const ex = await env.DB.prepare(`SELECT title FROM exams WHERE id=?`).bind(row.exam_id).first().catch(() => null);
+      await dispatchEventEmail(env, 'exam_session_cancelled', {
+        to: row.email,
+        examId: row.exam_id,
+        attemptId,
+        idempotencyKey: `attempt-cancelled:${attemptId}`,
+        throwOnProviderError: false,
+        data: {
+          recipient_name: row.full_name || row.candidate_code || row.email,
+          exam_title: ex?.title || row.exam_id,
+          candidate_code: row.candidate_code || '',
+          attempt_id: attemptId,
+          event_time: nowIso(),
+          status_label: 'Phiên thi đã hủy theo xác nhận của Hội đồng',
+          reason
+        }
+      }).catch(() => {});
+    }
+    return ok({ attempt_id: attemptId, status: 'cancelled', reason });
   }
 
   return bad('Hành động giám sát không hợp lệ.', 400);
@@ -2471,6 +3471,28 @@ async function adminResultWorkflowAction(env, attemptId, request) {
     detail: { previous_state: wfState, new_state: nextState, score: a.score, reason }
   });
 
+  if (nextState === 'published' && a.email && (env?.SEND_LIFECYCLE_EMAILS === '1' || env?.EMAIL_API_URL || body.notify_email)) {
+    const rec = await env.DB.prepare(`SELECT receipt_code FROM assessment_receipts WHERE attempt_id=? LIMIT 1`).bind(attemptId).first().catch(() => null);
+    const ex = await env.DB.prepare(`SELECT title FROM exams WHERE id=?`).bind(a.exam_id).first().catch(() => null);
+    await dispatchEventEmail(env, 'exam_result', {
+      to: a.email,
+      examId: a.exam_id,
+      attemptId,
+      idempotencyKey: `exam-result:${attemptId}:published`,
+      throwOnProviderError: false,
+      data: {
+        recipient_name: a.full_name || a.candidate_code || a.email,
+        exam_title: ex?.title || a.exam_id,
+        candidate_code: a.candidate_code || a.sfn_id || '',
+        receipt_code: rec?.receipt_code || '',
+        score: a.score,
+        max_score: a.max_score,
+        show_score: true,
+        status_label: 'Đã công bố chính thức'
+      }
+    }).catch(() => {});
+  }
+
   return ok({ attempt_id: attemptId, workflow_state: nextState, score: a.score, max_score: a.max_score });
 }
 
@@ -2483,9 +3505,9 @@ async function adminListAppeals(env, request) {
 async function adminResolveAppeal(env, appealId, request) {
   const admin = await authorizeAdmin(env, request, 'appeals:write');
   const body = await readJsonBody(request, 32_768);
-  const status = ['reviewing', 'resolved', 'rejected'].includes(str(body.status)) ? str(body.status) : 'resolved';
+  const status = ['received', 'reviewing', 'need_more_info', 'resolved', 'rejected'].includes(str(body.status)) ? str(body.status) : 'resolved';
   const resolutionNote = str(body.resolution_note).slice(0, 4000);
-  if (!resolutionNote) return bad('Vui lòng nhập kết luận giải quyết phúc khảo.', 400);
+  if (!resolutionNote) return bad('Vui lòng nhập nội dung cập nhật hoặc kết luận giải quyết phúc khảo.', 400);
 
   const appeal = await env.DB.prepare(`SELECT * FROM exam_appeals WHERE id=?`).bind(appealId).first();
   if (!appeal) return bad('Không tìm thấy đơn phúc khảo.', 404);
@@ -2494,23 +3516,58 @@ async function adminResolveAppeal(env, appealId, request) {
   if (body.score_after !== undefined && body.score_after !== null && body.score_after !== '') {
     newScore = Number(body.score_after);
     if (!Number.isFinite(newScore) || newScore < 0) return bad('Điểm sau phúc khảo không hợp lệ.', 400);
-    await env.DB.prepare(`UPDATE exam_guest_attempts SET score=? WHERE id=?`).bind(newScore, appeal.attempt_id).run();
-    await env.DB.prepare(`UPDATE exam_attempts SET score=? WHERE id=?`).bind(newScore, appeal.attempt_id).run();
+    if (status === 'resolved') {
+      await env.DB.prepare(`UPDATE exam_guest_attempts SET score=? WHERE id=?`).bind(newScore, appeal.attempt_id).run();
+      await env.DB.prepare(`UPDATE exam_attempts SET score=? WHERE id=?`).bind(newScore, appeal.attempt_id).run();
+    }
   }
 
+  const prevHistory = safeJson(appeal.history_json, []);
+  const nextHistory = [...(Array.isArray(prevHistory) ? prevHistory : []), { status, note: resolutionNote, by: admin.user_id, at: nowIso() }];
+
   await env.DB.prepare(
-    `UPDATE exam_appeals SET status=?, resolution_note=?, score_after=?, resolved_by=?, resolved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`
-  ).bind(status, resolutionNote, newScore, admin.user_id, appealId).run();
+    `UPDATE exam_appeals SET status=?, resolution_note=?, score_after=?, resolved_by=?, resolved_at=CURRENT_TIMESTAMP, history_json=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+  ).bind(status, resolutionNote, newScore, admin.user_id, JSON.stringify(nextHistory), appealId).run();
 
   await recordAudit(env, {
     examId: appeal.exam_id,
     attemptId: appeal.attempt_id,
     actorUserId: admin.user_id,
     eventType: 'appeal.resolved',
-    detail: { appeal_id: appealId, status, score_before: appeal.score_before, score_after: newScore, resolution_note: resolutionNote }
+    detail: { appeal_id: appealId, request_code: appeal.request_code, status, score_before: appeal.score_before, score_after: newScore, resolution_note: resolutionNote }
   });
 
-  return ok({ appeal_id: appealId, status, score_before: appeal.score_before, score_after: newScore });
+  if (appeal.candidate_email && (env?.SEND_LIFECYCLE_EMAILS === '1' || env?.EMAIL_API_URL || body.notify_email)) {
+    const isFinal = status === 'resolved' || status === 'rejected';
+    const eventType = isFinal ? 'appeal_result' : 'appeal_update';
+    const statusLabels = {
+      received: 'Đã tiếp nhận',
+      reviewing: 'Đang xem xét',
+      need_more_info: 'Cần bổ sung thông tin',
+      resolved: 'Đã giải quyết',
+      rejected: 'Từ chối với lý do phù hợp'
+    };
+    await dispatchEventEmail(env, eventType, {
+      to: appeal.candidate_email,
+      examId: appeal.exam_id,
+      attemptId: appeal.attempt_id,
+      requestId: appealId,
+      idempotencyKey: `appeal-${status}:${appealId}:${nextHistory.length}`,
+      throwOnProviderError: false,
+      data: {
+        recipient_name: appeal.full_name || appeal.candidate_code || appeal.candidate_email,
+        request_code: appeal.request_code || appeal.id,
+        exam_title: appeal.exam_title || appeal.exam_id,
+        candidate_code: appeal.candidate_code,
+        status_label: statusLabels[status] || status,
+        score_before: appeal.score_before,
+        score_after: isFinal ? newScore : null,
+        resolution_note: resolutionNote
+      }
+    }).catch(() => {});
+  }
+
+  return ok({ appeal_id: appealId, request_code: appeal.request_code || appealId, status, score_before: appeal.score_before, score_after: newScore });
 }
 
 // =============================================================================
@@ -2588,6 +3645,134 @@ async function adminDownloadResponseFile(env, fileId, request) {
   });
 }
 
+async function adminDownloadServiceFile(env, fileId, request) {
+  const admin = await authorizeAdmin(env, request);
+  const fileRow = await env.DB.prepare(`SELECT * FROM exam_service_files WHERE id=? AND status='active'`).bind(fileId).first();
+  if (!fileRow) return bad('Không tìm thấy tệp minh chứng nghiệp vụ.', 404);
+
+  const permByService = {
+    appeal: 'appeals:read',
+    support: 'support:read',
+    bug_report: 'support:read',
+    emergency: 'monitor:read',
+    fraud_report: 'fraud:read'
+  };
+  const needed = permByService[fileRow.service_type] || 'audit:read';
+  if (!hasAdminPermission(admin.roles, needed) && !hasAdminPermission(admin.roles, 'audit:read')) {
+    return bad('Bạn không có quyền truy cập tệp minh chứng của nghiệp vụ này.', 403, { code: 'INSUFFICIENT_PERMISSION' });
+  }
+
+  const obj = await env.FILES.get(fileRow.r2_key);
+  await recordAudit(env, {
+    actorUserId: admin.user_id,
+    eventType: 'service_file.downloaded',
+    detail: { file_id: fileId, service_type: fileRow.service_type, request_id: fileRow.request_id }
+  });
+  if (!obj) {
+    return ok({ file_metadata: { id: fileRow.id, name: fileRow.original_name, mime: fileRow.mime_type, size: fileRow.byte_size }, content_available: false });
+  }
+  return new Response(obj.body, {
+    status: 200,
+    headers: {
+      ...SECURITY,
+      'content-type': fileRow.mime_type || 'application/octet-stream',
+      'content-disposition': `attachment; filename="${safeName(fileRow.original_name)}"`
+    }
+  });
+}
+
+async function adminListFraudReports(env, request) {
+  await authorizeAdmin(env, request, 'fraud:read');
+  const rows = (await env.DB.prepare(`SELECT * FROM exam_fraud_reports ORDER BY created_at DESC LIMIT 100`).all().catch(() => ({ results: [] })))?.results || [];
+  return ok({
+    fraud_reports: rows.map(r => ({
+      ...r,
+      evidence_files: safeJson(r.evidence_files_json, []),
+      history: safeJson(r.history_json, [])
+    }))
+  });
+}
+
+async function adminResolveFraudReport(env, reportId, request) {
+  const admin = await authorizeAdmin(env, request, 'fraud:write');
+  const body = await readJsonBody(request, 16_384);
+  const status = ['received', 'verifying', 'verified', 'dismissed'].includes(str(body.status)) ? str(body.status) : 'verifying';
+  const resolutionNote = str(body.resolution_note).slice(0, 4000);
+  if (!resolutionNote) return bad('Vui lòng nhập biên bản xác minh hoặc ghi chú xử lý.', 400);
+
+  const report = await env.DB.prepare(`SELECT * FROM exam_fraud_reports WHERE id=?`).bind(reportId).first();
+  if (!report) return bad('Không tìm thấy báo cáo phản ánh.', 404);
+
+  const prevHistory = safeJson(report.history_json, []);
+  const nextHistory = [...(Array.isArray(prevHistory) ? prevHistory : []), { status, note: resolutionNote, by: admin.user_id, at: nowIso() }];
+
+  await env.DB.prepare(
+    `UPDATE exam_fraud_reports SET status=?, resolution_note=?, resolved_by=?, resolved_at=CURRENT_TIMESTAMP, history_json=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+  ).bind(status, resolutionNote, admin.user_id, JSON.stringify(nextHistory), reportId).run();
+
+  await recordAudit(env, {
+    examId: report.exam_id,
+    actorUserId: admin.user_id,
+    eventType: 'fraud_report.updated',
+    detail: { report_id: reportId, request_code: report.request_code, status, resolution_note: resolutionNote }
+  });
+
+  return ok({ report_id: reportId, request_code: report.request_code, status, resolution_note: resolutionNote });
+}
+
+async function adminListEmailLogs(env, request) {
+  await authorizeAdmin(env, request, 'audit:read');
+  const rows = (await env.DB.prepare(
+    `SELECT id, idempotency_key, event_type, template_file, sender_address, recipient_email, subject, status, provider, provider_message_id, retry_count, error_detail, exam_id, attempt_id, request_id, created_at, updated_at FROM exam_email_logs ORDER BY created_at DESC LIMIT 200`
+  ).all().catch(() => ({ results: [] })))?.results || [];
+  return ok({ email_logs: rows });
+}
+
+async function adminSendLifecycleEmailAction(env, request) {
+  const admin = await authorizeAdmin(env, request, 'exams:write');
+  const body = await readJsonBody(request, 32_768);
+  const eventType = str(body.event_type);
+  const to = str(body.to).toLowerCase();
+  if (!EMAIL_TEMPLATES[eventType]) {
+    return bad('Loại sự kiện email không hợp lệ.', 400);
+  }
+  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    return bad('Địa chỉ email người nhận không hợp lệ.', 400);
+  }
+  // Enforce confirmation checks before sending official ban or cancellation or result emails
+  if (eventType === 'exam_ban_notice' && !str(body.decision_code)) {
+    return bad('Chỉ được gửi thông báo xử lý vi phạm / cấm thi khi đã có mã quyết định hợp lệ được ghi nhận.', 409, { code: 'DECISION_REQUIRED' });
+  }
+  if (eventType === 'exam_session_cancelled' && !str(body.reason)) {
+    return bad('Bắt buộc nêu rõ lý do xác nhận hủy phiên thi.', 400, { code: 'CANCEL_REASON_REQUIRED' });
+  }
+  const res = await dispatchEventEmail(env, eventType, {
+    to,
+    examId: str(body.exam_id || '') || null,
+    attemptId: str(body.attempt_id || '') || null,
+    requestId: str(body.request_id || '') || null,
+    idempotencyKey: str(body.idempotency_key || '') || null,
+    throwOnProviderError: true,
+    data: body.data && typeof body.data === 'object' ? body.data : body
+  });
+  await recordAudit(env, {
+    examId: str(body.exam_id || '') || null,
+    attemptId: str(body.attempt_id || '') || null,
+    actorUserId: admin.user_id,
+    eventType: `email.dispatched.${eventType}`,
+    detail: { to, from: res.from, template_file: res.template_file, delivered: res.delivered, status: res.status }
+  });
+  if (!res.delivered) {
+    return json({
+      ok: false,
+      code: 'EMAIL_SERVICE_UNCONFIGURED',
+      message: res.reason || 'Dịch vụ gửi email chưa được cấu hình.',
+      detail: res
+    }, 503);
+  }
+  return ok({ email_result: res });
+}
+
 // =============================================================================
 // HEALTH CHECK (16 Core Tables + R2 Binding + Standalone Mode Confirmation)
 // =============================================================================
@@ -2643,9 +3828,16 @@ async function api(request, env) {
   // 1. Public Candidate Launch & Catalog & Eligibility & Results
   if (path === '/api/public/exam-launch/redeem' && method === 'POST') return redeemLaunch(env, request);
   if (path === '/api/public/catalog' && method === 'GET') return listPublicCatalog(env);
+  if (path === '/api/public/service-files/upload' && method === 'POST') return uploadPublicServiceFile(env, request);
   if (path === '/api/public/results/lookup' && method === 'POST') return lookupPublicResult(env, request);
   if (path === '/api/public/appeals' && method === 'POST') return submitPublicAppeal(env, request);
+  if (path === '/api/public/appeals/track' && method === 'POST') return trackPublicAppeal(env, request);
   if (path === '/api/public/support' && method === 'POST') return submitSupportRequest(env, request);
+  if (path === '/api/public/support/track' && method === 'POST') return trackPublicSupportRequest(env, request);
+  if (path === '/api/public/bug-reports' && method === 'POST') return submitBugReport(env, request);
+  if (path === '/api/public/emergency-incidents' && method === 'POST') return submitEmergencyIncident(env, request);
+  if (path === '/api/public/fraud-reports' && method === 'POST') return submitFraudReport(env, request);
+  if (path === '/api/public/fraud-reports/track' && method === 'POST') return trackPublicFraudReport(env, request);
 
   const pubAssess = path.match(/^\/api\/public\/assessments\/([^/]+)(?:\/(request-verification|start))?$/);
   if (pubAssess) {
@@ -2731,13 +3923,37 @@ async function api(request, env) {
     const supportId = decodeURIComponent(adminSupportResolve[1]);
     const admin = await authorizeAdmin(env, request, 'support:write');
     const body = await readJsonBody(request, 16_384);
+    const nextStatus = ['in_progress', 'need_more_info', 'resolved'].includes(str(body.status)) ? str(body.status) : 'resolved';
     const resolutionNote = str(body.resolution_note).slice(0, 2000);
     if (!resolutionNote) return bad('Vui lòng nhập nội dung xử lý sự cố.', 400);
     const existing = await env.DB.prepare(`SELECT * FROM exam_support_requests WHERE id=?`).bind(supportId).first();
     if (!existing) return bad('Không tìm thấy yêu cầu hỗ trợ.', 404);
-    await env.DB.prepare(`UPDATE exam_support_requests SET status='resolved', resolution_note=?, resolved_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(resolutionNote, admin.user_id, supportId).run();
-    await recordAudit(env, { examId: existing.exam_id, attemptId: existing.attempt_id, actorUserId: admin.user_id, eventType: 'support.resolved', detail: { support_id: supportId, resolution_note: resolutionNote } });
-    return ok({ support_id: supportId, status: 'resolved', resolution_note: resolutionNote });
+    const prevHistory = safeJson(existing.history_json, []);
+    const nextHistory = [...(Array.isArray(prevHistory) ? prevHistory : []), { status: nextStatus, note: resolutionNote, by: admin.user_id, at: nowIso() }];
+    await env.DB.prepare(`UPDATE exam_support_requests SET status=?, resolution_note=?, resolved_by=?, history_json=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(nextStatus, resolutionNote, admin.user_id, JSON.stringify(nextHistory), supportId).run();
+    await recordAudit(env, { examId: existing.exam_id, attemptId: existing.attempt_id, actorUserId: admin.user_id, eventType: nextStatus === 'resolved' ? 'support.resolved' : 'support.updated', detail: { support_id: supportId, status: nextStatus, resolution_note: resolutionNote } });
+
+    if (existing.candidate_email && (env?.SEND_LIFECYCLE_EMAILS === '1' || env?.EMAIL_API_URL || body.notify_email)) {
+      const evType = nextStatus === 'resolved' ? 'support_request_resolved' : 'support_request_update';
+      await dispatchEventEmail(env, evType, {
+        to: existing.candidate_email,
+        examId: existing.exam_id,
+        attemptId: existing.attempt_id,
+        requestId: supportId,
+        idempotencyKey: `support-${nextStatus}:${supportId}:${nextHistory.length}`,
+        throwOnProviderError: false,
+        data: {
+          recipient_name: existing.candidate_name || existing.candidate_email,
+          request_code: existing.request_code || existing.id,
+          exam_title: existing.exam_title || existing.exam_id || '',
+          candidate_code: existing.candidate_code || '',
+          status_label: nextStatus === 'resolved' ? 'Đã giải quyết' : 'Đang xử lý / Cần bổ sung thông tin',
+          resolution_note: resolutionNote
+        }
+      }).catch(() => {});
+    }
+
+    return ok({ support_id: supportId, request_code: existing.request_code || supportId, status: nextStatus, resolution_note: resolutionNote });
   }
 
   const adminGradingMatch = path.match(/^\/api\/admin\/grading\/([^/]+)(?:\/(grade|workflow))?$/);
@@ -2757,6 +3973,16 @@ async function api(request, env) {
 
   const adminFileMatch = path.match(/^\/api\/admin\/files\/([^/]+)$/);
   if (adminFileMatch && method === 'GET') return adminDownloadResponseFile(env, decodeURIComponent(adminFileMatch[1]), request);
+
+  const adminServiceFileMatch = path.match(/^\/api\/admin\/service-files\/([^/]+)$/);
+  if (adminServiceFileMatch && method === 'GET') return adminDownloadServiceFile(env, decodeURIComponent(adminServiceFileMatch[1]), request);
+
+  if (path === '/api/admin/fraud-reports' && method === 'GET') return adminListFraudReports(env, request);
+  const adminFraudResolve = path.match(/^\/api\/admin\/fraud-reports\/([^/]+)\/resolve$/);
+  if (adminFraudResolve && method === 'POST') return adminResolveFraudReport(env, decodeURIComponent(adminFraudResolve[1]), request);
+
+  if (path === '/api/admin/email-logs' && method === 'GET') return adminListEmailLogs(env, request);
+  if (path === '/api/admin/emails/send' && method === 'POST') return adminSendLifecycleEmailAction(env, request);
 
   // Unknown API routes return explicit local 404 JSON — never proxy to SLC!
   if (path.startsWith('/api/')) {
@@ -2781,9 +4007,9 @@ export default {
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#0d2a4a" />
   <meta name="color-scheme" content="light" />
-  <meta name="description" content="SKY FIRST EXAM 2026 — Phân hệ Quản trị Khảo thí Độc lập (/admin) với RBAC 10 vai trò, Ngân hàng câu hỏi, Tổ chức kỳ thi, Chấm thi, Phúc khảo và Nhật ký Kiểm toán." />
+  <meta name="description" content="Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First" />
   <meta name="robots" content="noindex,nofollow" />
-  <title>Quản trị Khảo thí (/admin) — SKY FIRST EXAM 2026</title>
+  <title>Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First</title>
   <link rel="icon" type="image/webp" href="/sky-first-logo.webp" />
   <link rel="apple-touch-icon" href="/sky-first-logo.webp" />
   <link rel="stylesheet" href="/styles.css?build=20261025-v5-final" />
@@ -2791,15 +4017,15 @@ export default {
 <body>
   <noscript>
     <div style="padding:18px;font-family:'Times New Roman',Times,serif;background:#fff4d6;color:#5f3dc4;border-bottom:1px solid #e5dbff">
-      Phân hệ Quản trị Khảo thí SKY FIRST EXAM (/admin) yêu cầu bật JavaScript để xác thực phiên quản trị và tải dữ liệu điều hành.
+      Hệ Thống Khảo Thí Và Đánh Giá Sky First yêu cầu bật JavaScript để xác thực phiên làm việc.
     </div>
   </noscript>
   <div id="app" aria-live="polite">
     <div class="shell" style="padding-top:36px">
       <div class="card">
-        <div class="badge">SKY FIRST EXAM 2026 • QUẢN TRỊ KHẢO THÍ ĐỘC LẬP</div>
-        <h1 class="h1" style="margin-top:10px">Đang khởi động Phân hệ Quản trị Khảo thí (/admin)…</h1>
-        <p class="sub">Hệ thống đang kiểm tra phiên làm việc quản trị viên và kết nối máy chủ khảo thí.</p>
+        <div class="badge">MẠNG LƯỚI GIÁO DỤC VÀ PHÁT TRIỂN CỘNG ĐỒNG SKY FIRST</div>
+        <h1 class="h1" style="margin-top:10px">Hệ Thống Khảo Thí Và Đánh Giá Sky First</h1>
+        <p class="sub">Đang kiểm tra phiên làm việc và kết nối máy chủ…</p>
       </div>
     </div>
   </div>
@@ -2816,7 +4042,7 @@ export default {
       }
       let response = await env.ASSETS.fetch(request);
       if (response.status === 404 && isGetOrHead) {
-        if (/^\/(?:exam|join)(?:\/|$)/.test(u.pathname)) {
+        if (/^\/(?:exam|join|tra-cuu|phuc-khao|ho-tro|bao-loi|su-co-khan-cap|to-cao-gian-lan)(?:\/|$)/.test(u.pathname)) {
           response = await env.ASSETS.fetch(new Request(new URL('/index.html', u.origin), request));
         }
       }
@@ -2840,4 +4066,4 @@ export default {
   }
 };
 
-export { autoScore, cleanEvents, mimeAllowed, publicQuestions, readJsonBody, sanitizeAnswers };
+export { autoScore, cleanEvents, mimeAllowed, evidenceFileAllowed, publicQuestions, readJsonBody, sanitizeAnswers, EMAIL_SENDERS, EMAIL_TEMPLATES, renderEmailTemplate, BRAND_UNIT_NAME, BRAND_SYSTEM_NAME };

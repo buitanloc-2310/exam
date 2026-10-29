@@ -1,6 +1,6 @@
 # HƯỚNG DẪN CẤU HÌNH, QUẢN TRỊ `/admin`, VẬN HÀNH KHẢO THÍ, TRIỂN KHAI & KHÔI PHỤC — SKY FIRST EXAM 2026 (v5.0.0)
 
-**Đơn vị:** TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST  
+**Đơn vị:** Hệ Thống Khảo Thí Và Đánh Giá Sky First  
 **Hệ thống:** Mạng lưới Giáo dục và Phát triển Cộng đồng Sky First (`SKY FIRST NETWORK`)  
 
 Tài liệu này cung cấp đầy đủ:

@@ -54,4 +54,69 @@ await test('Times New Roman is enforced globally across interface controls and c
 await test('submission body and server finalizer rely on the saved server snapshot',()=>{const backend=fs.readFileSync('src/index.js','utf8'),frontend=fs.readFileSync('public/exam.js','utf8');assert.match(backend,/const answers = safeJson\(a\.answers_json, \{\}\)/);assert.match(backend,/COALESCE\(answer_revision,0\)=\?/);assert.match(frontend,/JSON\.stringify\(\{revision\}\)/)});
 await test('/admin route has dedicated HTML entrypoints (public/admin.html & public/admin/index.html), SPA routing, and RBAC roles',()=>{const examJs=fs.readFileSync('public/exam.js','utf8'),adminJs=fs.readFileSync('public/admin.js','utf8'),adminHtml=fs.readFileSync('public/admin.html','utf8'),adminIdx=fs.readFileSync('public/admin/index.html','utf8');assert.ok(examJs.includes('/admin(?:\\/|$)/.test(u.pathname)'));assert.match(examJs,/import\('\.\/admin\.js/);assert.match(adminJs,/export async function bootAdmin/);assert.match(adminHtml,/\/admin\.js\?build=20261025-v5-final/);assert.match(adminIdx,/\/admin\.js\?build=20261025-v5-final/);assert.doesNotMatch(adminHtml,/<script[^>]*>[^<]+<\/script>/);assert.equal(ADMIN_ROLES.length,10)});
 await test('SLC control-plane proxy and URLs are completely removed from runtime files',()=>{for(const f of ['src/index.js','functions/health.js','public/_headers','public/exam.js','public/admin.js','public/core.js','public/storage.js','public/api.js']){const txt=fs.readFileSync(f,'utf8');assert.doesNotMatch(txt,/slc\.skyfirst\.io\.vn/,`Found slc.skyfirst.io.vn in ${f}`);assert.doesNotMatch(txt,/proxyToControl/,`Found proxyToControl in ${f}`)}});
+await test('Unified branding: Unit Name is always present, precedes System Name, and deprecated brand names are removed', () => {
+  const unitName = 'Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First';
+  const sysName = 'Hệ Thống Khảo Thí Và Đánh Giá Sky First';
+  for (const f of ['public/index.html', 'public/exam.js', 'public/admin.js', 'public/admin.html', 'public/admin/index.html', 'src/index.js', 'src/email-templates.js']) {
+    const txt = fs.readFileSync(f, 'utf8');
+    assert.ok(txt.includes(unitName), `Missing unit name in ${f}`);
+    assert.ok(txt.includes(sysName), `Missing system name in ${f}`);
+    assert.doesNotMatch(txt, /Cổng Khảo Thí Độc Lập/i, `Deprecated label Cổng Khảo Thí Độc Lập found in ${f}`);
+    assert.doesNotMatch(txt, /Cổng Khảo thí và Đánh giá Trực tuyến/i, `Deprecated label Cổng Khảo thí và Đánh giá Trực tuyến found in ${f}`);
+    assert.doesNotMatch(txt, /TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST/, `Deprecated label TRUNG TÂM KHẢO THÍ found in ${f}`);
+    assert.doesNotMatch(txt, /SKYFIRST-2026-ADMIN/, `Hardcoded bootstrap secret found in ${f}`);
+  }
+  const pubExam = fs.readFileSync('public/exam.js', 'utf8');
+  const pubHtml = fs.readFileSync('public/index.html', 'utf8');
+  assert.doesNotMatch(pubExam, /href="\/admin"/, 'Public exam.js must not link to /admin');
+  assert.doesNotMatch(pubExam, /Quản trị \(\/admin\)/, 'Public exam.js must not display Quản trị (/admin)');
+  assert.doesNotMatch(pubHtml, /\/admin/, 'Public index.html must not reference /admin');
+});
+
+await test('All 18 dedicated HTML email templates exist in src/emails/ and enforce 3 sender channels', async () => {
+  const { EMAIL_SENDERS, EMAIL_TEMPLATES, renderEmailTemplate } = await import('../src/email-templates.js');
+  const expectedFiles = [
+    ['exam_result', 'exam-result.html', EMAIL_SENDERS.EXAM],
+    ['appeal_received', 'appeal-received.html', EMAIL_SENDERS.EXAM],
+    ['appeal_update', 'appeal-update.html', EMAIL_SENDERS.EXAM],
+    ['appeal_result', 'appeal-result.html', EMAIL_SENDERS.EXAM],
+    ['exam_announcement', 'exam-announcement.html', EMAIL_SENDERS.EXAM],
+    ['email_verification', 'email-verification.html', EMAIL_SENDERS.NOREPLY],
+    ['login_verification_code', 'login-verification-code.html', EMAIL_SENDERS.NOREPLY],
+    ['exam_entry', 'exam-entry.html', EMAIL_SENDERS.NOREPLY],
+    ['exam_session_ended', 'exam-session-ended.html', EMAIL_SENDERS.NOREPLY],
+    ['exam_session_cancelled', 'exam-session-cancelled.html', EMAIL_SENDERS.NOREPLY],
+    ['integrity_warning', 'integrity-warning.html', EMAIL_SENDERS.NOREPLY],
+    ['fraud_report', 'fraud-report.html', EMAIL_SENDERS.NOREPLY],
+    ['exam_ban_notice', 'exam-ban-notice.html', EMAIL_SENDERS.NOREPLY],
+    ['system_notification', 'system-notification.html', EMAIL_SENDERS.NOREPLY],
+    ['support_request_received', 'support-request-received.html', EMAIL_SENDERS.SUPPORT],
+    ['support_request_update', 'support-request-update.html', EMAIL_SENDERS.SUPPORT],
+    ['support_request_resolved', 'support-request-resolved.html', EMAIL_SENDERS.SUPPORT],
+    ['technical_incident', 'technical-incident.html', EMAIL_SENDERS.SUPPORT]
+  ];
+  assert.equal(Object.keys(EMAIL_TEMPLATES).length, 18);
+  for (const [ev, file, sender] of expectedFiles) {
+    const diskPath = `src/emails/${file}`;
+    assert.ok(fs.existsSync(diskPath), `Missing email template file: ${diskPath}`);
+    const diskHtml = fs.readFileSync(diskPath, 'utf8');
+    const unitIdx = diskHtml.indexOf('Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First');
+    const sysIdx = diskHtml.indexOf('Hệ Thống Khảo Thí Và Đánh Giá Sky First');
+    assert.ok(unitIdx > -1 && sysIdx > unitIdx, `Unit name must appear before System name in ${file}`);
+    const rendered = renderEmailTemplate(ev, { recipient_name: 'Nguyễn Văn A', exam_title: 'Kỳ thi Mẫu', request_code: 'REQ-123' });
+    assert.equal(rendered.from, sender);
+    assert.equal(rendered.template_file, file);
+    assert.ok(rendered.html.includes('Nguyễn Văn A'));
+    assert.ok(rendered.text.includes('Nguyễn Văn A'));
+  }
+});
+
+await test('Separated business routes are configured in _redirects, src/index.js, and public/exam.js', () => {
+  const redirects = fs.readFileSync('public/_redirects', 'utf8');
+  const examJs = fs.readFileSync('public/exam.js', 'utf8');
+  for (const route of ['/tra-cuu', '/phuc-khao', '/ho-tro', '/bao-loi', '/su-co-khan-cap', '/to-cao-gian-lan']) {
+    assert.ok(redirects.includes(`${route} /index.html 200`), `Missing ${route} in _redirects`);
+    assert.ok(examJs.includes(`cleanPath==='${route}'`), `Missing route handler for ${route} in public/exam.js`);
+  }
+});
 console.log(`EXAM VALIDATION: ${checks}/${checks} PASS`);

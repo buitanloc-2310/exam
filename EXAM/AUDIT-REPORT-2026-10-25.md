@@ -1,6 +1,6 @@
 # BÁO CÁO KIỂM TOÁN, NHẬT KÝ THAY ĐỔI, KIỂM THỬ THỰC TẾ VÀ DANH SÁCH VẤN ĐỀ TỒN ĐỌNG — SKY FIRST EXAM 2026 (v5.0.0)
 
-**Đơn vị:** TRUNG TÂM KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST — Mạng lưới Giáo dục và Phát triển Cộng đồng Sky First (`SKY FIRST NETWORK`)  
+**Đơn vị:** Hệ Thống Khảo Thí Và Đánh Giá Sky First — Mạng lưới Giáo dục và Phát triển Cộng đồng Sky First (`SKY FIRST NETWORK`)  
 **Gói mã nguồn đầu vào đối chiếu:** `exam-main-audited.zip` (gốc) & `exam-skyfirst-2026-standalone-complete.zip` (`v5.0.0`)  
 **Gói mã nguồn hoàn thiện bàn giao:** `exam-skyfirst-2026-standalone-complete.zip` (25 tệp, đã cập nhật và kiểm chứng toàn diện)  
 **Ngày hoàn tất kiểm toán & nghiệm thu kỹ thuật:** 25/10/2026  

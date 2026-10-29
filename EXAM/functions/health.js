@@ -1,8 +1,9 @@
 export async function onRequestGet() {
   return Response.json({
     ok: true,
-    service: 'Sky First Exam',
-    version: '5.0.0',
+    unit: 'Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First',
+    service: 'Hệ Thống Khảo Thí Và Đánh Giá Sky First',
+    version: '6.0.0',
     status: 'available',
     runtime: {
       control_plane: 'standalone-exam-native',
