@@ -3999,6 +3999,25 @@ export default {
       const u = new URL(request.url);
       const isGetOrHead = ['GET', 'HEAD'].includes(request.method.toUpperCase());
       const isStaticAsset = /\.(?:js|mjs|css|webp|png|jpg|jpeg|svg|ico|json|txt|map|woff2?)$/i.test(u.pathname);
+      // Serve each public service route from its own directory index. Do not
+      // proxy these routes to /index.html: Cloudflare may canonicalize that
+      // HTML path to / and make every service URL appear to be the homepage.
+      const servicePath = u.pathname.replace(/\/+$/, '') || '/';
+      const publicServiceRoutes = new Set([
+        '/tra-cuu', '/phuc-khao', '/ho-tro', '/bao-loi',
+        '/su-co-khan-cap', '/to-cao-gian-lan'
+      ]);
+      if (isGetOrHead && publicServiceRoutes.has(servicePath)) {
+        const routeAsset = new URL(`${servicePath}/`, u.origin);
+        const routeRequest = new Request(routeAsset, request);
+        const routeResponse = await env.ASSETS.fetch(routeRequest);
+        const routeHeaders = new Headers(routeResponse.headers);
+        routeHeaders.set('cache-control', 'no-store, no-cache, must-revalidate');
+        return withSecurity(new Response(
+          request.method.toUpperCase() === 'HEAD' ? null : routeResponse.body,
+          { status: routeResponse.status, statusText: routeResponse.statusText, headers: routeHeaders }
+        ));
+      }
       if (isGetOrHead && !isStaticAsset && /^\/admin(?:\/|\.html|$)/.test(u.pathname)) {
         const adminHtml = `<!doctype html>
 <html lang="vi">
@@ -4012,7 +4031,7 @@ export default {
   <title>Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First</title>
   <link rel="icon" type="image/webp" href="/sky-first-logo.webp" />
   <link rel="apple-touch-icon" href="/sky-first-logo.webp" />
-  <link rel="stylesheet" href="/styles.css?build=20261025-v5-final" />
+  <link rel="stylesheet" href="/styles.css?build=20261030-routes-v2" />
 </head>
 <body>
   <noscript>
@@ -4029,7 +4048,7 @@ export default {
       </div>
     </div>
   </div>
-  <script type="module" src="/admin.js?build=20261025-v5-final"></script>
+  <script type="module" src="/admin.js?build=20261030-routes-v2"></script>
 </body>
 </html>`;
         return withSecurity(new Response(request.method.toUpperCase() === 'HEAD' ? null : adminHtml, {

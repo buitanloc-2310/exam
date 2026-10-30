@@ -1,6 +1,6 @@
-import {apiRequest} from './api.js?build=20261025-v5-final';
-import {getSession,setSession,clearSession,saveLocal,loadLocal,clearLocal,storageRestricted,acquireLease,renewLease,releaseLease} from './storage.js?build=20261025-v5-final';
-import {escapeHtml as esc,timeMs,formatClock,answerStatus,optionsFor,normalizeExam,cleanAnswers,eventUnion,parseInvite,AnswerJournal} from './core.js?build=20261025-v5-final';
+import {apiRequest} from './api.js?build=20261030-routes-v2';
+import {getSession,setSession,clearSession,saveLocal,loadLocal,clearLocal,storageRestricted,acquireLease,renewLease,releaseLease} from './storage.js?build=20261030-routes-v2';
+import {escapeHtml as esc,timeMs,formatClock,answerStatus,optionsFor,normalizeExam,cleanAnswers,eventUnion,parseInvite,AnswerJournal} from './core.js?build=20261030-routes-v2';
 const UNIT_NAME='Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First';
 const SYSTEM_NAME='Hệ Thống Khảo Thí Và Đánh Giá Sky First';
 const app=document.querySelector('#app');
@@ -522,7 +522,7 @@ async function guestGate(code){
 async function boot(){try{
  const u=new URL(location.href),launch=u.searchParams.get('launch'),cleanPath=u.pathname.replace(/\/+$/,'')||'/';
  if(/^\/admin(?:\/|$)/.test(u.pathname)){
-  const {bootAdmin}=await import('./admin.js?build=20261025-v5-final');
+  const {bootAdmin}=await import('./admin.js?build=20261030-routes-v2');
   return await bootAdmin(app);
  }
  if(cleanPath==='/tra-cuu')return pageTraCuu();

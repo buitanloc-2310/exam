@@ -4,9 +4,9 @@
 // Zero mock numbers; server-verified RBAC; OTP login + CSRF protection.
 // =============================================================================
 
-import { apiRequest } from './api.js?build=20261025-v5-final';
-import { getAdminSession, setAdminSession, clearAdminSession } from './storage.js?build=20261025-v5-final';
-import { escapeHtml as esc, timeMs } from './core.js?build=20261025-v5-final';
+import { apiRequest } from './api.js?build=20261030-routes-v2';
+import { getAdminSession, setAdminSession, clearAdminSession } from './storage.js?build=20261030-routes-v2';
+import { escapeHtml as esc, timeMs } from './core.js?build=20261030-routes-v2';
 
 let adminState = {
   tab: 'dashboard',

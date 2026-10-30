@@ -86,7 +86,7 @@ const baseEnv = {
   ASSETS: {
     fetch: async req => {
       const u = new URL(req.url);
-      if (u.pathname === '/' || u.pathname.startsWith('/admin') || u.pathname.startsWith('/join/') || u.pathname.startsWith('/exam/')) {
+      if (u.pathname === '/' || u.pathname.startsWith('/admin') || u.pathname.startsWith('/join/') || u.pathname.startsWith('/exam/') || ['/tra-cuu/', '/phuc-khao/', '/ho-tro/', '/bao-loi/', '/su-co-khan-cap/', '/to-cao-gian-lan/'].includes(u.pathname)) {
         return new Response(fs.readFileSync('public/index.html', 'utf8'), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
       }
       return new Response('not-found', { status: 404 });
@@ -969,6 +969,18 @@ try {
   db.close();
 }
 
+// 14B. Public service routes must stay on their requested URL and load the app shell directly.
+{
+  for (const path of ['/tra-cuu', '/phuc-khao', '/ho-tro', '/bao-loi', '/su-co-khan-cap', '/to-cao-gian-lan']) {
+    const res = await examWorker.fetch(new Request(`https://exam.skyfirst.io.vn${path}`, { method: 'GET' }), baseEnv);
+    assert.equal(res.status, 200, `Expected 200 for ${path}`);
+    assert.equal(res.headers.get('location'), null, `Unexpected redirect for ${path}`);
+    assert.match(res.headers.get('cache-control') || '', /no-store/);
+    assert.match(await res.text(), /id="app"/);
+  }
+  console.log('PASS Scenario 14B: all six public service routes return the app shell without redirecting to /');
+}
+
 // 15. Direct Worker /admin HTML routing on exam.skyfirst.io.vn and www.exam.skyfirst.io.vn (CSP-compliant, zero inline scripts)
 {
   for (const url of ['https://exam.skyfirst.io.vn/admin', 'https://www.exam.skyfirst.io.vn/admin', 'https://exam.skyfirst.io.vn/admin/exams']) {
@@ -977,7 +989,7 @@ try {
     assert.match(res.headers.get('content-security-policy') || '', /script-src 'self'/);
     assert.match(res.headers.get('cache-control') || '', /no-store/);
     const html = await res.text();
-    assert.match(html, /<script type="module" src="\/admin\.js\?build=20261025-v5-final"><\/script>/);
+    assert.match(html, /<script type="module" src="\/admin\.js\?build=20261030-routes-v2"><\/script>/);
     assert.doesNotMatch(html, /Khu quản trị không có trong cổng dự thi/);
   }
   console.log('PASS Scenario 15: Worker directly serves CSP-compliant /admin HTML on exam.skyfirst.io.vn/admin and www.exam.skyfirst.io.vn/admin');
