@@ -48,6 +48,60 @@ export class CacheStore {
 
 export const sharedCache = new CacheStore(10_000);
 
+/**
+ * Add the authentication/RBAC columns to an existing legacy users table.
+ * CREATE TABLE IF NOT EXISTS does not upgrade an already-existing table;
+ * inspect the live schema and add only the columns that are actually missing.
+ */
+export async function ensureUserAuthSchema(db) {
+  if (!db?.prepare) throw new Error('D1 binding DB is unavailable');
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    full_name TEXT,
+    sfn_id TEXT,
+    email TEXT,
+    status TEXT DEFAULT 'active',
+    role TEXT DEFAULT 'candidate',
+    roles_json TEXT DEFAULT '["candidate"]',
+    class_id TEXT,
+    expires_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`).run();
+
+  const required = {
+    full_name: 'TEXT',
+    sfn_id: 'TEXT',
+    email: 'TEXT',
+    status: `TEXT DEFAULT 'active'`,
+    role: `TEXT DEFAULT 'candidate'`,
+    roles_json: `TEXT DEFAULT '["candidate"]'`,
+    class_id: 'TEXT',
+    expires_at: 'TEXT',
+    created_at: 'TEXT',
+    updated_at: 'TEXT'
+  };
+
+  let info = await db.prepare(`PRAGMA table_info(users)`).all();
+  let columns = new Set((info?.results || []).map(column => String(column.name).toLowerCase()));
+  if (!columns.has('id')) throw new Error('Bảng users hiện tại không có cột id bắt buộc.');
+
+  for (const [name, ddl] of Object.entries(required)) {
+    if (columns.has(name)) continue;
+    await db.prepare(`ALTER TABLE users ADD COLUMN ${name} ${ddl}`).run();
+    columns.add(name);
+  }
+
+  info = await db.prepare(`PRAGMA table_info(users)`).all();
+  columns = new Set((info?.results || []).map(column => String(column.name).toLowerCase()));
+  const missing = ['id', ...Object.keys(required)].filter(name => !columns.has(name));
+  if (missing.length) {
+    throw new Error(`Không thể hoàn thiện schema xác thực của users; thiếu cột: ${missing.join(', ')}`);
+  }
+  return columns;
+}
+
 export async function ensureAdditiveSchema(env) {
   if (!env?.DB?.prepare || initializedDbs.has(env.DB)) return;
   try {
@@ -201,19 +255,9 @@ export async function ensureAdditiveSchema(env) {
     for (const sql of alters) {
       await env.DB.prepare(sql).run().catch(() => {});
     }
-    // Automatically provision & enforce immutable System Owner account (skyfirst.ec@gmail.com)
-    const ownerEmail = 'skyfirst.ec@gmail.com';
-    const ownerRolesJson = '["system_owner","system_admin"]';
-    const existingOwner = await env.DB.prepare(`SELECT id FROM users WHERE LOWER(email)=? LIMIT 1`).bind(ownerEmail).first().catch(() => null);
-    if (existingOwner?.id) {
-      await env.DB.prepare(
-        `UPDATE users SET full_name=COALESCE(NULLIF(full_name,''),'Chủ Sở Hữu Hệ Thống Sky First'), status='active', role='system_owner', roles_json=?, expires_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?`
-      ).bind(ownerRolesJson, existingOwner.id).run().catch(() => {});
-    } else {
-      await env.DB.prepare(
-        `INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json,expires_at) VALUES('owner-skyfirst-ec','Chủ Sở Hữu Hệ Thống Sky First','SFO-0001',?,'active','system_owner',?,NULL)`
-      ).bind(ownerEmail, ownerRolesJson).run().catch(() => {});
-    }
+    // Verify legacy authentication columns before marking this D1 binding initialized.
+    // This is not optional: the owner OTP flow depends on these columns.
+    await ensureUserAuthSchema(env.DB);
     initializedDbs.add(env.DB);
   } catch {
     // Non-fatal fallback

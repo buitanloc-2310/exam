@@ -845,6 +845,24 @@ try {
       const countUsers = legacyDb.prepare(`SELECT COUNT(*) n FROM users WHERE id='legacy-u1'`).get().n;
       assert.equal(countExams, 1);
       assert.equal(countUsers, 1);
+
+      // Critical regression: legacy users table originally had only five columns.
+      // After schema initialization, the owner must still be provisioned and receive OTP.
+      legacyDb.prepare(`DELETE FROM users WHERE LOWER(email)='skyfirst.ec@gmail.com'`).run();
+      const legacyOwnerOtpRes = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/api/admin/auth/request-otp', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'Skyfirst.ec@gmail.com' })
+      }), legEnv);
+      const legacyOwnerOtpData = await legacyOwnerOtpRes.json();
+      assert.equal(legacyOwnerOtpRes.status, 200, JSON.stringify(legacyOwnerOtpData));
+      const legacyOwner = legacyDb.prepare(`SELECT email,status,role,roles_json,expires_at FROM users WHERE LOWER(email)='skyfirst.ec@gmail.com'`).get();
+      assert.ok(legacyOwner, 'Legacy D1 must receive the owner account');
+      assert.equal(legacyOwner.status, 'active');
+      assert.equal(legacyOwner.role, 'system_owner');
+      assert.deepEqual(JSON.parse(legacyOwner.roles_json), ['system_owner', 'system_admin']);
+      assert.equal(legacyOwner.expires_at, null);
+      assert.equal(sentEmails.at(-1).to, 'skyfirst.ec@gmail.com');
     } finally {
       legacyDb.close();
     }

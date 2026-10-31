@@ -10,7 +10,7 @@
 //  - Uniform JSON response structure across all endpoints
 // =============================================================================
 
-import { ensureAdditiveSchema } from './repository.js';
+import { ensureAdditiveSchema, ensureUserAuthSchema } from './repository.js';
 import { dispatchEventEmail, httpError, sha256Hex, str, timingSafeEqualStr } from './adapters.js';
 import { ALLOWED_HOSTNAMES } from './page-router.js';
 
@@ -431,33 +431,45 @@ export async function adminBootstrap(env, request) {
 export async function ensureSystemOwnerAccount(env) {
   if (!env?.DB?.prepare) throw new Error('D1 binding DB is unavailable');
 
+  // Always re-check the live table schema, even when the generic migration cache
+  // says this DB was initialized earlier. Older production users tables may have
+  // only id/full_name/sfn_id/email/status.
+  await ensureAdditiveSchema(env);
+  await ensureUserAuthSchema(env.DB);
+
   const email = SYSTEM_OWNER_EMAIL;
   const rolesJson = JSON.stringify(['system_owner', 'system_admin']);
-  let user = await env.DB.prepare(
-    `SELECT id, email, status, role, roles_json, expires_at FROM users WHERE LOWER(TRIM(email))=? LIMIT 1`
-  ).bind(email).first();
+  const existingRows = await env.DB.prepare(
+    `SELECT id FROM users WHERE LOWER(TRIM(email))=? ORDER BY id LIMIT 10`
+  ).bind(email).all();
+  const matching = existingRows?.results || [];
 
-  if (user?.id) {
-    await env.DB.prepare(
-      `UPDATE users SET full_name=?, status='active', role='system_owner', roles_json=?, expires_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?`
-    ).bind('Chủ Sở Hữu Hệ Thống Sky First', rolesJson, user.id).run();
+  if (matching.length) {
+    // Normalize every legacy duplicate for this exact owner mailbox so that
+    // whichever row the login lookup selects has the same authoritative roles.
+    const update = await env.DB.prepare(
+      `UPDATE users SET full_name=?, email=?, status='active', role='system_owner', roles_json=?, expires_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE LOWER(TRIM(email))=?`
+    ).bind('Chủ Sở Hữu Hệ Thống Sky First', email, rolesJson, email).run();
+    if (update?.success === false) throw new Error('D1 rejected the owner account update.');
   } else {
     // Avoid silently failing on a pre-existing unrelated row using the legacy fixed ID.
     let userId = 'owner-skyfirst-ec';
     const idCollision = await env.DB.prepare(`SELECT id FROM users WHERE id=? LIMIT 1`).bind(userId).first();
     if (idCollision) userId = `owner-skyfirst-ec-${crypto.randomUUID().slice(0, 8)}`;
-    await env.DB.prepare(
+    const inserted = await env.DB.prepare(
       `INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json,expires_at) VALUES(?,?,?,?,?,?,?,NULL)`
     ).bind(userId, 'Chủ Sở Hữu Hệ Thống Sky First', 'SFO-0001', email, 'active', 'system_owner', rolesJson).run();
+    if (inserted?.success === false) throw new Error('D1 rejected the owner account insert.');
   }
 
-  user = await env.DB.prepare(
-    `SELECT * FROM users WHERE LOWER(TRIM(email))=? LIMIT 1`
-  ).bind(email).first();
+  const verifiedRows = await env.DB.prepare(
+    `SELECT * FROM users WHERE LOWER(TRIM(email))=? ORDER BY id LIMIT 10`
+  ).bind(email).all();
+  const user = (verifiedRows?.results || [])[0] || null;
   const roles = parseUserRoles(user);
   if (!user || user.status !== 'active' || isAccountExpired(user) ||
       !roles.includes('system_owner') || !roles.includes('system_admin')) {
-    throw new Error('D1 did not persist the required system-owner account and roles');
+    throw new Error('D1 did not persist the required active system_owner + system_admin roles.');
   }
   return user;
 }
@@ -484,7 +496,10 @@ export async function requestAdminOtp(env, request) {
       return bad(
         'Không thể hoàn tất việc cấp quyền quản trị cho tài khoản chủ hệ thống do lỗi cơ sở dữ liệu. Vui lòng kiểm tra cấu hình D1 và triển khai lại.',
         503,
-        { code: 'OWNER_PROVISIONING_FAILED' }
+        {
+          code: 'OWNER_PROVISIONING_FAILED',
+          database_reason: String(error?.message || error).slice(0, 240)
+        }
       );
     }
   } else {
