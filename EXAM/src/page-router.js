@@ -2,10 +2,10 @@
 // =============================================================================
 // SKY FIRST EXAM 2026 — DEDICATED MULTI-ROUTE SSR HTML PAGE ROUTER
 // (src/page-router.js)
-// Ensures all 9 mandatory paths on both hostnames (exam.skyfirst.io.vn &
+// Ensures all mandatory paths on both hostnames (exam.skyfirst.io.vn &
 // www.exam.skyfirst.io.vn) serve their own distinct, route-specific HTML content
 // with HTTP 200 (never redirecting to / or returning generic homepage markup),
-// while returning HTTP 404 for unknown routes.
+// while returning HTTP 404 for removed unknown routes.
 // =============================================================================
 
 import { BRAND_UNIT_NAME, BRAND_SYSTEM_NAME } from './email-templates.js';
@@ -25,7 +25,6 @@ const PUBLIC_NAV_ITEMS = [
   ['/tra-cuu-ket-qua', 'Tra cứu kết quả thi'],
   ['/phuc-khao', 'Phúc khảo'],
   ['/ho-tro', 'Hỗ trợ'],
-  ['/bao-loi', 'Báo lỗi'],
   ['/su-co-khan-cap', 'Sự cố khẩn cấp'],
   ['/to-cao-gian-lan', 'Tố cáo gian lận']
 ];
@@ -43,7 +42,6 @@ export const PUBLIC_ROUTE_DEFINITIONS = Object.freeze({
         <a class="service-card" href="/tra-cuu-ket-qua"><div><b>Tra cứu kết quả thi</b><p>Thí sinh sử dụng thông tin dự thi đã được cấp để tra cứu kết quả và trạng thái công bố.</p></div><span>Truy cập /tra-cuu-ket-qua →</span></a>
         <a class="service-card" href="/phuc-khao"><div><b>Đăng ký phúc khảo</b><p>Gửi yêu cầu phúc khảo theo kỳ thi, bài thi và theo dõi tiến độ thẩm định.</p></div><span>Truy cập /phuc-khao →</span></a>
         <a class="service-card" href="/ho-tro"><div><b>Hỗ trợ thí sinh</b><p>Gửi câu hỏi hoặc yêu cầu hỗ trợ kỹ thuật, quy chế và tra cứu mã tiếp nhận.</p></div><span>Truy cập /ho-tro →</span></a>
-        <a class="service-card" href="/bao-loi"><div><b>Báo lỗi hệ thống</b><p>Báo lỗi giao diện, đăng nhập, dự thi, tra cứu kèm hình ảnh/tệp đính kèm.</p></div><span>Truy cập /bao-loi →</span></a>
         <a class="service-card" href="/su-co-khan-cap"><div><b>Báo sự cố khẩn cấp</b><p>Báo các tình huống khẩn cấp ảnh hưởng trực tiếp đến phiên thi đang diễn ra.</p></div><span>Truy cập /su-co-khan-cap →</span></a>
         <a class="service-card" href="/to-cao-gian-lan"><div><b>Tố cáo gian lận</b><p>Gửi phản ánh bảo mật về hành vi gian lận hoặc vi phạm quy chế thi kèm minh chứng.</p></div><span>Truy cập /to-cao-gian-lan →</span></a>
       </div>`
@@ -76,15 +74,6 @@ export const PUBLIC_ROUTE_DEFINITIONS = Object.freeze({
     ssrBody: `
       <p class="lead">Gửi câu hỏi hoặc yêu cầu hỗ trợ về thủ tục dự thi, mã truy cập, xác thực OTP hoặc tra cứu kết quả. Mỗi yêu cầu được cấp mã tiếp nhận (HT-...) và xác nhận qua support@skyfirst.io.vn.</p>`
   },
-  '/bao-loi': {
-    routeKey: 'bao-loi',
-    title: `Báo lỗi hệ thống — ${BRAND_UNIT_NAME} — ${BRAND_SYSTEM_NAME}`,
-    heading: 'Báo lỗi hệ thống & Kỹ thuật',
-    subtitle: 'Tiếp nhận báo cáo lỗi giao diện, đăng nhập, dự thi, tra cứu hoặc lỗi chức năng kỹ thuật.',
-    description: 'Báo lỗi giao diện, đăng nhập, dự thi, tra cứu hoặc các vấn đề kỹ thuật kèm tệp/hình ảnh minh chứng.',
-    ssrBody: `
-      <p class="lead">Mô tả chi tiết lỗi gặp phải, các bước tái hiện và đính kèm hình ảnh/tệp minh họa (được kiểm tra chữ ký tệp và lưu trữ bảo mật trên R2). Nhận mã biên nhận kỹ thuật (BL-...).</p>`
-  },
   '/su-co-khan-cap': {
     routeKey: 'su-co-khan-cap',
     title: `Báo sự cố khẩn cấp — ${BRAND_UNIT_NAME} — ${BRAND_SYSTEM_NAME}`,
@@ -92,7 +81,12 @@ export const PUBLIC_ROUTE_DEFINITIONS = Object.freeze({
     subtitle: 'Tiếp nhận và phân loại ưu tiên các tình huống ảnh hưởng trực tiếp đến phiên làm bài đang diễn ra.',
     description: 'Cho phép thí sinh báo các tình huống ảnh hưởng trực tiếp đến việc dự thi để ghi nhận dấu thời gian và hỗ trợ xử lý theo quy chế.',
     ssrBody: `
-      <p class="lead">Dành cho thí sinh gặp sự cố gián đoạn kết nối, mất điện, lỗi thiết bị hoặc sự cố khẩn cấp ngay trong giờ làm bài. Hệ thống ghi nhận tức thời vào bảng giám sát coi thi và cấp mã tiếp nhận (KC-...).</p>`
+      <p class="lead">Dành cho thí sinh gặp sự cố gián đoạn kết nối, mất điện, lỗi thiết bị hoặc sự cố khẩn cấp ngay trong giờ làm bài. Hệ thống ghi nhận tức thời vào bảng giám sát coi thi và cấp mã tiếp nhận (KC-...).</p>
+      <div class="notice warn">
+        <b>Hướng dẫn xử lý ngay trong khi chờ hỗ trợ:</b>
+        <br>1. <b>Không đóng tab trình duyệt đang làm bài</b> (nếu phòng thi vẫn đang mở) để trình duyệt giữ nguyên bản lưu dự phòng trên thiết bị.
+        <br>2. Kiểm tra nhanh kết nối mạng trên thiết bị và gửi ngay biểu mẫu sự cố khẩn cấp để máy chủ ghi nhận dấu thời gian xảy ra sự cố.
+      </div>`
   },
   '/to-cao-gian-lan': {
     routeKey: 'to-cao-gian-lan',
@@ -105,14 +99,21 @@ export const PUBLIC_ROUTE_DEFINITIONS = Object.freeze({
   }
 });
 
+export function normalizeRoutePathname(pathname = '/') {
+  return String(pathname || '/')
+    .replace(/\/index\.html$/i, '')
+    .replace(/\.html$/i, '')
+    .replace(/\/+$/, '') || '/';
+}
+
 export function renderPublicRouteHtml(pathname, origin = 'https://exam.skyfirst.io.vn') {
-  const cleanPath = String(pathname || '/').replace(/\/+$/, '') || '/';
+  const cleanPath = normalizeRoutePathname(pathname);
   const def = PUBLIC_ROUTE_DEFINITIONS[cleanPath] || PUBLIC_ROUTE_DEFINITIONS['/'];
   const canonicalUrl = `${origin}${cleanPath === '/' ? '/' : cleanPath}`;
 
   const navHtml = PUBLIC_NAV_ITEMS.map(([href, label]) => {
     const isCurrent = href === cleanPath;
-    return `<a class="nav-pill ${isCurrent ? 'active' : ''}" href="${href}">${label}</a>`;
+    return `<a class="text-button nav-pill ${isCurrent ? 'active-nav active' : ''}" href="${href}">${label}</a>`;
   }).join('');
 
   return `<!doctype html>
@@ -140,7 +141,7 @@ export function renderPublicRouteHtml(pathname, origin = 'https://exam.skyfirst.
           <small>${BRAND_SYSTEM_NAME}</small>
         </span>
       </a>
-      <nav class="public-nav" aria-label="Điều hướng dịch vụ khảo thí">${navHtml}</nav>
+      <nav class="gate-nav public-nav" aria-label="Điều hướng dịch vụ khảo thí">${navHtml}</nav>
     </header>
     <main class="gate-card gate-wide">
       <div class="ey">${BRAND_UNIT_NAME}</div>
@@ -148,6 +149,11 @@ export function renderPublicRouteHtml(pathname, origin = 'https://exam.skyfirst.
       <h1>${def.heading}</h1>
       ${def.ssrBody}
     </main>
+    <footer class="gate-footer">
+      <div class="footer-unit">${BRAND_UNIT_NAME}</div>
+      <div class="footer-sys">${BRAND_SYSTEM_NAME}</div>
+      <div class="footer-contacts">Nghiệp vụ khảo thí: <a href="mailto:exam@skyfirst.io.vn">exam@skyfirst.io.vn</a> · Hỗ trợ kỹ thuật: <a href="mailto:support@skyfirst.io.vn">support@skyfirst.io.vn</a></div>
+    </footer>
   </div>
   <noscript>
     <main class="gate">
@@ -184,14 +190,45 @@ export function renderAdminRouteHtml() {
       Hệ Thống Khảo Thí Và Đánh Giá Sky First yêu cầu bật JavaScript để xác thực phiên làm việc quản trị.
     </div>
   </noscript>
-  <div id="app" aria-live="polite">
-    <div class="shell" style="padding-top:36px">
-      <div class="card">
-        <div class="badge">MẠNG LƯỚI GIÁO DỤC VÀ PHÁT TRIỂN CỘNG ĐỒNG SKY FIRST</div>
-        <h1 class="h1" style="margin-top:10px">Phân hệ Quản trị — Hệ Thống Khảo Thí Và Đánh Giá Sky First</h1>
-        <p class="sub">Xác thực tài khoản công vụ được cấp quyền bằng mã OTP một lần…</p>
-      </div>
-    </div>
+  <div id="app" class="gate" aria-live="polite">
+    <header class="gate-header">
+      <a class="gate-brand" href="/" aria-label="${BRAND_SYSTEM_NAME}">
+        <img src="/sky-first-logo.webp" alt="Sky First">
+        <span>
+          <b>${BRAND_UNIT_NAME}</b>
+          <small>${BRAND_SYSTEM_NAME}</small>
+        </span>
+      </a>
+    </header>
+    <main class="gate-card gate-wide">
+      <div class="ey">${BRAND_UNIT_NAME}</div>
+      <div class="sys-sub">${BRAND_SYSTEM_NAME}</div>
+      <h1>Phân hệ Quản trị — Xác thực tài khoản được cấp quyền</h1>
+      <p class="lead">Vui lòng nhập địa chỉ email đã được cấp quyền để đăng nhập hoặc nhận mã xác minh một lần (OTP 6 chữ số).</p>
+      <form id="adminOtpForm">
+        <div class="two">
+          <div class="field">
+            <label for="adminEmail">Địa chỉ email tài khoản (*)</label>
+            <input id="adminEmail" name="email" type="email" required maxlength="220" autocomplete="email" placeholder="Nhập địa chỉ email được cấp quyền">
+          </div>
+          <div class="field">
+            <label for="adminOtp">Mã xác minh OTP (6 chữ số)</label>
+            <input id="adminOtp" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Nhập 6 chữ số (nếu được yêu cầu)">
+          </div>
+        </div>
+        <div id="adminAuthStatus" class="notice" hidden role="status" aria-live="polite"></div>
+        <div class="actions">
+          <button type="button" class="btn" id="btnSendAdminOtp">1. Tiếp tục / Nhận mã xác minh</button>
+          <button type="submit" class="btn primary">2. Xác minh &amp; Đăng nhập →</button>
+          <a class="btn" href="/">← Về trang chủ</a>
+        </div>
+      </form>
+    </main>
+    <footer class="gate-footer">
+      <div class="footer-unit">${BRAND_UNIT_NAME}</div>
+      <div class="footer-sys">${BRAND_SYSTEM_NAME}</div>
+      <div class="footer-contacts">Nghiệp vụ khảo thí: exam@skyfirst.io.vn · Hỗ trợ kỹ thuật: support@skyfirst.io.vn</div>
+    </footer>
   </div>
   <script type="module" src="/admin.js?build=20261030-routes-v2"></script>
 </body>
@@ -215,11 +252,12 @@ export function renderNotFoundHtml(pathname = '') {
       <div class="ey">${BRAND_UNIT_NAME}</div>
       <div class="sys-sub">${BRAND_SYSTEM_NAME}</div>
       <h1>Không tìm thấy đường dẫn yêu cầu (404)</h1>
-      <p class="lead">Đường dẫn bạn truy cập không tồn tại trên Hệ Thống Khảo Thí Và Đánh Giá Sky First.</p>
+      <p class="lead">Đường dẫn bạn truy cập không tồn tại hoặc đã ngừng phục vụ trên Hệ Thống Khảo Thí Và Đánh Giá Sky First.</p>
       <div class="actions">
         <a class="btn primary" href="/">Về trang chủ</a>
         <a class="btn" href="/tra-cuu-ket-qua">Tra cứu kết quả thi</a>
         <a class="btn" href="/ho-tro">Hỗ trợ thí sinh</a>
+        <a class="btn" href="/su-co-khan-cap">Sự cố khẩn cấp</a>
       </div>
     </section>
   </main>

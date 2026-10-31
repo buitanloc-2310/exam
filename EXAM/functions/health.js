@@ -3,7 +3,7 @@ export async function onRequestGet() {
     ok: true,
     unit: 'Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First',
     service: 'Hệ Thống Khảo Thí Và Đánh Giá Sky First',
-    version: '6.0.0',
+    version: '7.0.0',
     status: 'available',
     runtime: {
       control_plane: 'standalone-exam-native',

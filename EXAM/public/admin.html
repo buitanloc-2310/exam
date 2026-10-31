@@ -7,25 +7,56 @@
   <meta name="color-scheme" content="light" />
   <meta name="description" content="Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First" />
   <meta name="robots" content="noindex,nofollow" />
-  <title>Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First</title>
+  <title>Phân hệ Quản trị (/admin) — Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First</title>
   <link rel="icon" type="image/webp" href="/sky-first-logo.webp" />
   <link rel="apple-touch-icon" href="/sky-first-logo.webp" />
   <link rel="stylesheet" href="/styles.css?build=20261030-routes-v2" />
 </head>
-<body>
+<body data-route="admin">
   <noscript>
     <div style="padding:18px;font-family:'Times New Roman',Times,serif;background:#fff4d6;color:#5f3dc4;border-bottom:1px solid #e5dbff">
       Hệ Thống Khảo Thí Và Đánh Giá Sky First yêu cầu bật JavaScript để xác thực phiên làm việc.
     </div>
   </noscript>
-  <div id="app" aria-live="polite">
-    <div class="shell" style="padding-top:36px">
-      <div class="card">
-        <div class="badge">MẠNG LƯỚI GIÁO DỤC VÀ PHÁT TRIỂN CỘNG ĐỒNG SKY FIRST</div>
-        <h1 class="h1" style="margin-top:10px">Hệ Thống Khảo Thí Và Đánh Giá Sky First</h1>
-        <p class="sub">Đang kiểm tra phiên làm việc và kết nối máy chủ…</p>
-      </div>
-    </div>
+  <div id="app" class="gate" aria-live="polite">
+    <header class="gate-header">
+      <a class="gate-brand" href="/" aria-label="Hệ Thống Khảo Thí Và Đánh Giá Sky First">
+        <img src="/sky-first-logo.webp" alt="Sky First">
+        <span>
+          <b>Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</b>
+          <small>Hệ Thống Khảo Thí Và Đánh Giá Sky First</small>
+        </span>
+      </a>
+    </header>
+    <main class="gate-card gate-wide">
+      <div class="ey">Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</div>
+      <div class="sys-sub">Hệ Thống Khảo Thí Và Đánh Giá Sky First</div>
+      <h1>Phân hệ Quản trị — Xác thực tài khoản được cấp quyền</h1>
+      <p class="lead">Vui lòng nhập địa chỉ email đã được cấp quyền để đăng nhập hoặc nhận mã xác minh một lần (OTP 6 chữ số).</p>
+      <form id="adminOtpForm">
+        <div class="two">
+          <div class="field">
+            <label for="adminEmail">Địa chỉ email tài khoản (*)</label>
+            <input id="adminEmail" name="email" type="email" required maxlength="220" autocomplete="email" placeholder="Nhập địa chỉ email được cấp quyền">
+          </div>
+          <div class="field">
+            <label for="adminOtp">Mã xác minh OTP (6 chữ số)</label>
+            <input id="adminOtp" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Nhập 6 chữ số (nếu được yêu cầu)">
+          </div>
+        </div>
+        <div id="adminAuthStatus" class="notice" hidden role="status" aria-live="polite"></div>
+        <div class="actions">
+          <button type="button" class="btn" id="btnSendAdminOtp">1. Tiếp tục / Nhận mã xác minh</button>
+          <button type="submit" class="btn primary">2. Xác minh &amp; Đăng nhập →</button>
+          <a class="btn" href="/">← Về trang chủ</a>
+        </div>
+      </form>
+    </main>
+    <footer class="gate-footer">
+      <div class="footer-unit">Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</div>
+      <div class="footer-sys">Hệ Thống Khảo Thí Và Đánh Giá Sky First</div>
+      <div class="footer-contacts">Nghiệp vụ khảo thí: exam@skyfirst.io.vn · Hỗ trợ kỹ thuật: support@skyfirst.io.vn</div>
+    </footer>
   </div>
   <script type="module" src="/admin.js?build=20261030-routes-v2"></script>
 </body>

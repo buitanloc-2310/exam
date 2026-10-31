@@ -1,16 +1,19 @@
 // =============================================================================
 // SKY FIRST EXAM 2026 — AUTHENTICATION, OTP & RBAC SERVICE (src/auth-service.js)
-// Implements Part 1 Sections III, IV, VIII & Part 2 Sections V, VIII:
+// Implements:
+//  - Fast-path unauthenticated check (0 D1 queries when no token/cookie is present)
+//  - Constraint-safe D1 System Owner provisioning (Skyfirst.ec@gmail.com)
+//  - Server-controlled one-time first login for System Owner (no OTP on 1st login,
+//    auto-locks permanently after 1st login, mandatory 6-digit email OTP from 2nd login)
 //  - Strict Backend Account, Role, Status & Expiration Verification in D1
-//    BEFORE generating or sending any OTP
+//    BEFORE generating or sending any OTP for all other accounts
 //  - 6-digit CSPRNG OTP, SHA-256 hashed, 5-minute TTL, single-use, old OTP
-//    invalidation, immediate resend, max 5 attempts, email & IP rate limits
+//    invalidation, max 5 attempts, email & IP rate limits
 //  - Multi-hostname Cookie & CORS/CSRF compatibility (exam.skyfirst.io.vn &
 //    www.exam.skyfirst.io.vn)
-//  - Uniform JSON response structure across all endpoints
 // =============================================================================
 
-import { ensureAdditiveSchema, ensureUserAuthSchema } from './repository.js';
+import { ensureAdditiveSchema, ensureUserAuthSchema, upsertCompatibleUser } from './repository.js';
 import { dispatchEventEmail, httpError, sha256Hex, str, timingSafeEqualStr } from './adapters.js';
 import { ALLOWED_HOSTNAMES } from './page-router.js';
 
@@ -94,7 +97,6 @@ export const bad = (message, status = 400, detail) => {
     ...(detail !== undefined ? { detail } : {})
   }, status);
 };
-
 
 export const timingSafeStringEqual = timingSafeEqualStr;
 export const sha256Text = sha256Hex;
@@ -186,7 +188,11 @@ export function parseCookies(request) {
   for (const part of raw.split(';')) {
     const idx = part.indexOf('=');
     if (idx > 0) {
-      out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+      try {
+        out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+      } catch {
+        out[part.slice(0, idx).trim()] = part.slice(idx + 1).trim();
+      }
     }
   }
   return out;
@@ -269,7 +275,9 @@ export function hasAdminPermission(roles, requiredPerm) {
 }
 
 export function isAccountExpired(record) {
-  if (!record?.expires_at) return false;
+  if (!record) return false;
+  if (str(record.email).toLowerCase() === SYSTEM_OWNER_EMAIL) return false;
+  if (!record.expires_at) return false;
   const expMs = databaseTimeMs(record.expires_at);
   return Number.isFinite(expMs) && expMs <= Date.now();
 }
@@ -286,7 +294,7 @@ function buildSessionCookie(request, sessionToken, maxAgeSeconds = 28800) {
 }
 
 export async function authorizeAdmin(env, request, requiredPermission = null) {
-  await ensureAdditiveSchema(env);
+  // Fast-path: check token/cookie BEFORE touching D1 so unauthenticated /admin visits return in < 1ms
   let rawToken = bearerToken(request);
   let fromCookie = false;
   if (!rawToken) {
@@ -299,15 +307,22 @@ export async function authorizeAdmin(env, request, requiredPermission = null) {
   if (!rawToken) {
     throw httpError('Vui lòng đăng nhập vào hệ thống Quản trị (/admin).', 401, { code: 'ADMIN_AUTH_REQUIRED' });
   }
+
+  await ensureAdditiveSchema(env);
   const tokenHash = await sha256Text(rawToken);
   const session = await env.DB.prepare(
-    `SELECT s.*, u.full_name, u.status user_status, u.role user_role, u.roles_json user_roles_json, u.expires_at user_expires_at FROM exam_admin_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL`
+    `SELECT s.*, u.full_name, u.status user_status, u.role user_role, u.roles_json user_roles_json, u.expires_at user_expires_at FROM exam_admin_sessions s LEFT JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL`
   ).bind(tokenHash).first();
 
-  if (!session || session.user_status !== 'active') {
+  if (!session) {
+    throw httpError('Phiên quản trị không hợp lệ hoặc đã bị thu hồi.', 401, { code: 'ADMIN_SESSION_INVALID' });
+  }
+  const isOwner = str(session.email).toLowerCase() === SYSTEM_OWNER_EMAIL;
+  const effectiveStatus = session.user_status || (isOwner ? 'active' : '');
+  if (effectiveStatus !== 'active') {
     throw httpError('Phiên quản trị không hợp lệ hoặc tài khoản đã bị vô hiệu hóa.', 401, { code: 'ADMIN_SESSION_INVALID' });
   }
-  if (isAccountExpired({ expires_at: session.user_expires_at })) {
+  if (!isOwner && isAccountExpired({ email: session.email, expires_at: session.user_expires_at })) {
     await env.DB.prepare(`UPDATE exam_admin_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE token_hash=?`).bind(tokenHash).run().catch(() => {});
     throw httpError('Thời hạn hoạt động của tài khoản quản trị đã hết hạn.', 403, { code: 'ACCOUNT_EXPIRED' });
   }
@@ -342,7 +357,11 @@ export async function authorizeAdmin(env, request, requiredPermission = null) {
     }
   }
 
-  const roles = parseUserRoles({ role: session.user_role, roles_json: session.user_roles_json || session.roles_json });
+  const roles = parseUserRoles({
+    email: session.email,
+    role: session.user_role,
+    roles_json: session.user_roles_json || session.roles_json
+  });
   if (!roles.length) {
     throw httpError('Tài khoản của bạn đã bị thu hồi quyền quản trị.', 403, { code: 'ADMIN_ROLE_REVOKED' });
   }
@@ -358,7 +377,7 @@ export async function authorizeAdmin(env, request, requiredPermission = null) {
   return {
     user_id: session.user_id,
     email: session.email,
-    full_name: session.full_name || session.email,
+    full_name: session.full_name || (isOwner ? 'Chủ Sở Hữu Hệ Thống Sky First' : session.email),
     roles,
     csrf_token: session.csrf_token,
     token_hash: tokenHash
@@ -393,13 +412,16 @@ export async function adminBootstrap(env, request) {
     : ['system_admin'];
   if (!roles.length) return bad('Vai trò quản trị không hợp lệ.', 400, { code: 'INVALID_ROLE' });
 
-  let user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(email)=?`).bind(email).first();
-  const userId = user?.id || `admin-${crypto.randomUUID().slice(0, 8)}`;
-  if (user) {
-    await env.DB.prepare(`UPDATE users SET full_name=?, status='active', role=?, roles_json=? WHERE id=?`).bind(fullName, roles[0], JSON.stringify(roles), userId).run();
-  } else {
-    await env.DB.prepare(`INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json) VALUES(?,?,?,?,?,?,?)`).bind(userId, fullName, `ADM-${userId.slice(-4).toUpperCase()}`, email, 'active', roles[0], JSON.stringify(roles)).run();
-  }
+  const upserted = await upsertCompatibleUser(env.DB, {
+    id: `admin-${crypto.randomUUID().slice(0, 8)}`,
+    email,
+    full_name: fullName,
+    status: 'active',
+    role: roles[0],
+    roles
+  });
+  const userId = upserted.id;
+
   const sessionToken = randomHex(32);
   const sessionHash = await sha256Text(sessionToken);
   const csrfToken = randomHex(24);
@@ -424,54 +446,135 @@ export async function adminBootstrap(env, request) {
 }
 
 /**
- * Ensure the configured system owner exists as an active, non-expiring owner.
- * This is deliberately a backend D1 operation; frontend state is never trusted.
- * Errors are propagated so a failed grant cannot be disguised as an unauthorized email.
+ * Ensure the configured system owner (Skyfirst.ec@gmail.com) exists as an active,
+ * non-expiring owner in D1 using live schema introspection (handling any legacy
+ * NOT NULL or CHECK constraints on the users table).
  */
 export async function ensureSystemOwnerAccount(env) {
   if (!env?.DB?.prepare) throw new Error('D1 binding DB is unavailable');
 
-  // Always re-check the live table schema, even when the generic migration cache
-  // says this DB was initialized earlier. Older production users tables may have
-  // only id/full_name/sfn_id/email/status.
   await ensureAdditiveSchema(env);
   await ensureUserAuthSchema(env.DB);
 
   const email = SYSTEM_OWNER_EMAIL;
-  const rolesJson = JSON.stringify(['system_owner', 'system_admin']);
-  const existingRows = await env.DB.prepare(
-    `SELECT id FROM users WHERE LOWER(TRIM(email))=? ORDER BY id LIMIT 10`
-  ).bind(email).all();
-  const matching = existingRows?.results || [];
+  const ownerRoles = ['system_owner', 'system_admin'];
 
-  if (matching.length) {
-    // Normalize every legacy duplicate for this exact owner mailbox so that
-    // whichever row the login lookup selects has the same authoritative roles.
-    const update = await env.DB.prepare(
-      `UPDATE users SET full_name=?, email=?, status='active', role='system_owner', roles_json=?, expires_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE LOWER(TRIM(email))=?`
-    ).bind('Chủ Sở Hữu Hệ Thống Sky First', email, rolesJson, email).run();
-    if (update?.success === false) throw new Error('D1 rejected the owner account update.');
-  } else {
-    // Avoid silently failing on a pre-existing unrelated row using the legacy fixed ID.
-    let userId = 'owner-skyfirst-ec';
-    const idCollision = await env.DB.prepare(`SELECT id FROM users WHERE id=? LIMIT 1`).bind(userId).first();
-    if (idCollision) userId = `owner-skyfirst-ec-${crypto.randomUUID().slice(0, 8)}`;
-    const inserted = await env.DB.prepare(
-      `INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json,expires_at) VALUES(?,?,?,?,?,?,?,NULL)`
-    ).bind(userId, 'Chủ Sở Hữu Hệ Thống Sky First', 'SFO-0001', email, 'active', 'system_owner', rolesJson).run();
-    if (inserted?.success === false) throw new Error('D1 rejected the owner account insert.');
-  }
+  const user = await upsertCompatibleUser(env.DB, {
+    id: 'owner-skyfirst-ec',
+    email,
+    full_name: 'Chủ Sở Hữu Hệ Thống Sky First',
+    sfn_id: 'SFO-0001',
+    status: 'active',
+    role: 'system_owner',
+    roles: ownerRoles,
+    expires_at: null
+  });
 
-  const verifiedRows = await env.DB.prepare(
-    `SELECT * FROM users WHERE LOWER(TRIM(email))=? ORDER BY id LIMIT 10`
-  ).bind(email).all();
-  const user = (verifiedRows?.results || [])[0] || null;
-  const roles = parseUserRoles(user);
-  if (!user || user.status !== 'active' || isAccountExpired(user) ||
+  const roles = parseUserRoles({ ...user, email });
+  if (!user || user.status !== 'active' || isAccountExpired({ ...user, email }) ||
       !roles.includes('system_owner') || !roles.includes('system_admin')) {
     throw new Error('D1 did not persist the required active system_owner + system_admin roles.');
   }
-  return user;
+  return { ...user, email, roles };
+}
+
+/**
+ * Attempt to claim the server-controlled one-time first-login state for the
+ * Supreme System Owner (`Skyfirst.ec@gmail.com`).
+ * Returns an authenticated session response on the very first login (and permanently
+ * locks the one-time state in D1), or returns `null` if the first login has already
+ * been completed/locked so the caller proceeds to the mandatory 6-digit OTP flow.
+ */
+async function tryClaimOwnerFirstLoginSession(env, request, ownerUser) {
+  if (env?.OWNER_FIRST_LOGIN_DISABLED === '1') return null;
+
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS exam_owner_bootstrap_state (
+    state_key TEXT PRIMARY KEY,
+    owner_email TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'armed',
+    used_count INTEGER NOT NULL DEFAULT 0,
+    max_uses INTEGER NOT NULL DEFAULT 1,
+    claimed_session_hash TEXT,
+    claimed_at TEXT,
+    locked_at TEXT,
+    locked_by_ip TEXT DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`).run().catch(() => {});
+
+  const priorSessionsRow = await env.DB.prepare(
+    `SELECT COUNT(*) n FROM exam_admin_sessions WHERE LOWER(email)=?`
+  ).bind(SYSTEM_OWNER_EMAIL).first().catch(() => ({ n: 0 }));
+  const priorSessionCount = Number(priorSessionsRow?.n || 0);
+
+  // Ensure the state record exists
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO exam_owner_bootstrap_state(state_key,owner_email,status,used_count,max_uses,locked_at) VALUES('supreme_owner_first_login',?,?,?,1,?)`
+  ).bind(
+    SYSTEM_OWNER_EMAIL,
+    priorSessionCount > 0 ? 'locked' : 'armed',
+    priorSessionCount > 0 ? 1 : 0,
+    priorSessionCount > 0 ? nowIso() : null
+  ).run().catch(() => {});
+
+  // If any prior owner session already existed, lock the bootstrap state permanently
+  if (priorSessionCount > 0) {
+    await env.DB.prepare(
+      `UPDATE exam_owner_bootstrap_state SET status='locked', used_count=CASE WHEN used_count<1 THEN 1 ELSE used_count END, locked_at=COALESCE(locked_at,CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE state_key='supreme_owner_first_login' AND status!='locked'`
+    ).run().catch(() => {});
+    return null;
+  }
+
+  const sessionToken = randomHex(32);
+  const sessionHash = await sha256Text(sessionToken);
+  const csrfToken = randomHex(24);
+  const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString();
+  const clientIp = clientIpFrom(request);
+
+  // Atomic single-use claim in D1: succeeds at most once!
+  const claim = await env.DB.prepare(
+    `UPDATE exam_owner_bootstrap_state SET status='locked', used_count=used_count+1, claimed_session_hash=?, claimed_at=CURRENT_TIMESTAMP, locked_at=CURRENT_TIMESTAMP, locked_by_ip=?, updated_at=CURRENT_TIMESTAMP WHERE state_key='supreme_owner_first_login' AND status='armed' AND used_count=0`
+  ).bind(sessionHash, clientIp).run();
+
+  if (!Number(claim?.meta?.changes || 0)) {
+    return null;
+  }
+
+  const roles = ['system_owner', 'system_admin'];
+  await env.DB.prepare(
+    `INSERT INTO exam_admin_sessions(token_hash,user_id,email,roles_json,csrf_token,expires_at,created_at,last_seen_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
+  ).bind(sessionHash, ownerUser.id, SYSTEM_OWNER_EMAIL, JSON.stringify(roles), csrfToken, expiresAt).run();
+
+  await recordAudit(env, {
+    actorUserId: ownerUser.id,
+    eventType: 'admin.owner.first_login_completed',
+    detail: {
+      email: SYSTEM_OWNER_EMAIL,
+      roles,
+      one_time_bootstrap_locked: true,
+      subsequent_logins_require_otp: true
+    }
+  });
+
+  return ok(
+    {
+      first_login: true,
+      requires_otp: false,
+      otp_required: false,
+      sent: false,
+      admin_token: sessionToken,
+      csrf_token: csrfToken,
+      expires_at: expiresAt,
+      user: {
+        id: ownerUser.id,
+        email: SYSTEM_OWNER_EMAIL,
+        full_name: ownerUser.full_name || 'Chủ Sở Hữu Hệ Thống Sky First',
+        roles
+      },
+      message: 'Đã nhận diện Tài khoản Chủ hệ thống tối cao và hoàn tất đăng nhập lần đầu thành công. Trạng thái khởi tạo một lần đã tự động khóa; từ lần đăng nhập thứ hai hệ thống sẽ gửi mã OTP 6 chữ số qua email.'
+    },
+    { 'set-cookie': buildSessionCookie(request, sessionToken, 28800) }
+  );
 }
 
 export async function requestAdminOtp(env, request) {
@@ -483,11 +586,12 @@ export async function requestAdminOtp(env, request) {
   }
 
   const clientIp = clientIpFrom(request);
-  // The owner account is provisioned and verified in D1 before any OTP is issued.
-  // Never swallow a database error or convert a failed grant into ACCOUNT_NOT_AUTHORIZED.
+  let ownerUser = null;
+
   if (email === SYSTEM_OWNER_EMAIL) {
+    await checkRateLimit(env, `owner_otp_req:${email}`, 30, 15 * 60 * 1000);
     try {
-      await ensureSystemOwnerAccount(env);
+      ownerUser = await ensureSystemOwnerAccount(env);
     } catch (error) {
       await recordAudit(env, {
         eventType: 'admin.owner.provision_failed',
@@ -502,6 +606,16 @@ export async function requestAdminOtp(env, request) {
         }
       );
     }
+
+    // Section III.1: If the server-controlled one-time first login has not been consumed yet
+    // (and force_otp is not explicitly requested), complete the first login immediately without OTP
+    // and lock the one-time initialization state permanently.
+    if (!body.force_otp) {
+      const firstLoginResponse = await tryClaimOwnerFirstLoginSession(env, request, ownerUser);
+      if (firstLoginResponse) {
+        return firstLoginResponse;
+      }
+    }
   } else {
     if (clientIp !== 'local') {
       await checkRateLimit(env, `admin_otp_ip:${clientIp}`, 60, 15 * 60 * 1000);
@@ -509,8 +623,11 @@ export async function requestAdminOtp(env, request) {
     await checkRateLimit(env, `admin_otp_req:${email}`, 20, 15 * 60 * 1000);
   }
 
-  // STEP 2 MANDATORY: Check D1 account existence, status, expiration, and admin role BEFORE generating OTP or sending email
-  const user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(email)=? LIMIT 1`).bind(email).first();
+  // Check D1 account existence, status, expiration, and admin role BEFORE generating OTP or sending email
+  let user = ownerUser || await env.DB.prepare(`SELECT * FROM users WHERE LOWER(TRIM(email))=? LIMIT 1`).bind(email).first();
+  if (!user && email !== SYSTEM_OWNER_EMAIL) {
+    user = await env.DB.prepare(`SELECT user_id id, email, full_name, status, role, roles_json, expires_at FROM exam_admin_accounts WHERE LOWER(TRIM(email))=? LIMIT 1`).bind(email).first().catch(() => null);
+  }
   const roles = parseUserRoles(user);
   const isExpired = isAccountExpired(user);
   if (email === SYSTEM_OWNER_EMAIL && (!user || user.status !== 'active' || isExpired || !roles.includes('system_owner') || !roles.includes('system_admin'))) {
@@ -532,14 +649,13 @@ export async function requestAdminOtp(env, request) {
     );
   }
 
-  // No fixed cooldown timer: immediately invalidate previous unused OTPs and issue a fresh code
-
-  // Invalidate any previous unused OTP challenges for this email
-  await env.DB.prepare(
-    `UPDATE exam_otp_challenges SET used_at=CURRENT_TIMESTAMP WHERE email=? AND purpose='admin_login' AND used_at IS NULL`
-  ).bind(email).run().catch(() => {});
-
   const canonicalEmail = str(user.email || email).toLowerCase();
+
+  // Immediately invalidate any previous unused OTP challenges for this email
+  await env.DB.prepare(
+    `UPDATE exam_otp_challenges SET used_at=CURRENT_TIMESTAMP WHERE LOWER(email)=? AND purpose='admin_login' AND used_at IS NULL`
+  ).bind(canonicalEmail).run().catch(() => {});
+
   const otp = randomOtp6();
   const otpHash = await sha256Text(`admin:${canonicalEmail}:${otp}`);
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
@@ -578,9 +694,13 @@ export async function requestAdminOtp(env, request) {
   }
 
   return ok({
+    first_login: false,
+    requires_otp: true,
     sent: true,
+    requires_otp: true,
+    otp_required: true,
     expires_in_seconds: 300,
-    message: 'Mã OTP quản trị 6 chữ số đã được gửi tới email công vụ của bạn.'
+    message: 'Mã OTP quản trị 6 chữ số đã được gửi từ noreply@skyfirst.io.vn tới email của bạn.'
   });
 }
 
@@ -592,10 +712,12 @@ export async function verifyAdminOtp(env, request) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^\d{6}$/.test(otp)) {
     return bad('Email hoặc mã OTP 6 chữ số không hợp lệ.', 400, { code: 'INVALID_OTP_FORMAT' });
   }
-  // The owner uses the same abuse protection; no global rate-limit state is deleted.
   await checkRateLimit(env, `admin_otp_verify:${email}`, 20, 10 * 60 * 1000);
 
-  const user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(email)=? LIMIT 1`).bind(email).first();
+  let user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(TRIM(email))=? LIMIT 1`).bind(email).first();
+  if (!user && email === SYSTEM_OWNER_EMAIL) {
+    user = await ensureSystemOwnerAccount(env).catch(() => null);
+  }
   const roles = parseUserRoles(user);
   if (!user || user.status !== 'active' || isAccountExpired(user) || !roles.length) {
     return bad(
@@ -607,11 +729,22 @@ export async function verifyAdminOtp(env, request) {
 
   const canonicalEmail = str(user.email || email).toLowerCase();
   const challenge = await env.DB.prepare(
-    `SELECT * FROM exam_otp_challenges WHERE email=? AND purpose='admin_login' AND used_at IS NULL ORDER BY created_at DESC LIMIT 1`
+    `SELECT * FROM exam_otp_challenges WHERE LOWER(email)=? AND purpose='admin_login' AND used_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT 1`
   ).bind(canonicalEmail).first();
 
-  const expMs = databaseTimeMs(challenge?.expires_at);
-  if (!challenge || !Number.isFinite(expMs) || expMs <= Date.now()) {
+  if (!challenge) {
+    const usedChallenge = await env.DB.prepare(
+      `SELECT id, otp_hash, used_at FROM exam_otp_challenges WHERE LOWER(email)=? AND purpose='admin_login' AND used_at IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 1`
+    ).bind(canonicalEmail).first().catch(() => null);
+    const candidateHash = await sha256Text(`admin:${canonicalEmail}:${otp}`);
+    if (usedChallenge && timingSafeStringEqual(candidateHash, usedChallenge.otp_hash)) {
+      return bad('Mã OTP này đã được sử dụng và không thể dùng lại. Vui lòng yêu cầu mã mới.', 401, { code: 'OTP_ALREADY_USED' });
+    }
+    return bad('Mã OTP không tồn tại hoặc đã hết hạn. Vui lòng yêu cầu mã mới.', 401, { code: 'OTP_EXPIRED' });
+  }
+
+  const expMs = databaseTimeMs(challenge.expires_at);
+  if (!Number.isFinite(expMs) || expMs <= Date.now()) {
     return bad('Mã OTP không tồn tại hoặc đã hết hạn. Vui lòng yêu cầu mã mới.', 401, { code: 'OTP_EXPIRED' });
   }
   if (Number(challenge.attempts || 0) >= Number(challenge.max_attempts || 5)) {
@@ -628,6 +761,13 @@ export async function verifyAdminOtp(env, request) {
   const claim = await env.DB.prepare(`UPDATE exam_otp_challenges SET used_at=CURRENT_TIMESTAMP WHERE id=? AND used_at IS NULL`).bind(challenge.id).run();
   if (!Number(claim?.meta?.changes || 0)) {
     return bad('Mã OTP này đã được sử dụng.', 409, { code: 'OTP_ALREADY_USED' });
+  }
+
+  // Ensure owner first-login bootstrap state is also marked locked once any OTP login completes
+  if (canonicalEmail === SYSTEM_OWNER_EMAIL) {
+    await env.DB.prepare(
+      `UPDATE exam_owner_bootstrap_state SET status='locked', used_count=CASE WHEN used_count<1 THEN 1 ELSE used_count END, locked_at=COALESCE(locked_at,CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE state_key='supreme_owner_first_login'`
+    ).run().catch(() => {});
   }
 
   const sessionToken = randomHex(32);

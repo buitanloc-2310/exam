@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "include": [
+    "/*"
+  ],
+  "exclude": [
+    "/styles.css",
+    "/sky-first-logo.webp",
+    "/api.js",
+    "/storage.js",
+    "/core.js",
+    "/security-client.js",
+    "/exam.js",
+    "/admin.js"
+  ]
+}

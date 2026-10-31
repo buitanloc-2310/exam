@@ -7,7 +7,7 @@
 // =============================================================================
 
 import { EMAIL_SENDERS, EMAIL_TEMPLATES, renderEmailTemplate } from './email-templates.js';
-import { ensureAdditiveSchema, sharedCache } from './repository.js';
+import { ensureAdditiveSchema, sharedCache, upsertCompatibleUser } from './repository.js';
 import {
   dispatchBusinessEmail,
   dispatchEventEmail,
@@ -21,6 +21,7 @@ import {
   SYSTEM_OWNER_ROLE,
   ADMIN_ROLES,
   ROLE_PERMISSIONS,
+  SECURITY_HEADERS,
   authorizeAdmin,
   bad,
   bearerToken,
@@ -1433,9 +1434,18 @@ async function adminIssueLaunchToken(env, request) {
   if (exam.status !== 'published') return bad('Chỉ có thể cấp mã khởi chạy cho kỳ thi đang mở (published).', 409);
 
   let user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(email)=?`).bind(email).first();
-  const userId = user?.id || `usr-${crypto.randomUUID().slice(0, 8)}`;
+  let userId = user?.id || `usr-${crypto.randomUUID().slice(0, 8)}`;
   if (!user) {
-    await env.DB.prepare(`INSERT INTO users(id,full_name,sfn_id,email,status) VALUES(?,?,?,?,'active')`).bind(userId, fullName || email, candidateCode, email).run();
+    const created = await upsertCompatibleUser(env.DB, {
+      id: userId,
+      email,
+      full_name: fullName || email,
+      sfn_id: candidateCode,
+      status: 'active',
+      role: 'candidate',
+      roles: ['candidate']
+    });
+    userId = created.id;
   }
 
   const attemptId = crypto.randomUUID();
@@ -1947,16 +1957,19 @@ async function adminManageUserRole(env, request) {
     if (!roles.includes(SYSTEM_OWNER_ROLE)) roles.unshift(SYSTEM_OWNER_ROLE);
   }
 
-  let user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(email)=?`).bind(email).first();
-  const userId = user?.id || `usr-${crypto.randomUUID().slice(0, 8)}`;
   const primaryRole = roles[0] || 'candidate';
   const expiresAt = body.expires_at ? str(body.expires_at) : null;
-
-  if (user) {
-    await env.DB.prepare(`UPDATE users SET full_name=COALESCE(NULLIF(?,''),full_name), status=?, role=?, roles_json=?, expires_at=COALESCE(?, expires_at) WHERE id=?`).bind(fullName, status, primaryRole, JSON.stringify(roles), expiresAt, userId).run();
-  } else {
-    await env.DB.prepare(`INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json,expires_at) VALUES(?,?,?,?,?,?,?,?)`).bind(userId, fullName || email, `SFN-${userId.slice(-4).toUpperCase()}`, email, status, primaryRole, JSON.stringify(roles), expiresAt).run();
-  }
+  const upserted = await upsertCompatibleUser(env.DB, {
+    id: `usr-${crypto.randomUUID().slice(0, 8)}`,
+    email,
+    full_name: fullName || email,
+    status,
+    role: primaryRole,
+    roles,
+    expires_at: expiresAt,
+    preserveExistingExpiry: !body.expires_at && email !== SYSTEM_OWNER_EMAIL
+  });
+  const userId = upserted.id;
 
   // If user is revoked/locked or stripped of admin roles, immediately revoke all active admin sessions
   const remainingAdminRoles = roles.filter(r => ADMIN_ROLES.includes(r));
@@ -2002,7 +2015,7 @@ async function adminDownloadResponseFile(env, fileId, request) {
   return new Response(obj.body, {
     status: 200,
     headers: {
-      ...SECURITY,
+      ...SECURITY_HEADERS,
       'content-type': fileRow.mime || 'application/octet-stream',
       'content-disposition': `attachment; filename="${safeName(fileRow.name)}"`
     }
@@ -2038,7 +2051,7 @@ async function adminDownloadServiceFile(env, fileId, request) {
   return new Response(obj.body, {
     status: 200,
     headers: {
-      ...SECURITY,
+      ...SECURITY_HEADERS,
       'content-type': fileRow.mime_type || 'application/octet-stream',
       'content-disposition': `attachment; filename="${safeName(fileRow.original_name)}"`
     }

@@ -292,7 +292,37 @@ CREATE TABLE IF NOT EXISTS exam_secondary_camera_links (
 );
 CREATE INDEX IF NOT EXISTS idx_sec_cam_links_attempt ON exam_secondary_camera_links(attempt_id, status);
 
+CREATE TABLE IF NOT EXISTS exam_admin_accounts (
+  email TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  full_name TEXT DEFAULT '',
+  sfn_id TEXT DEFAULT '',
+  status TEXT DEFAULT 'active',
+  role TEXT DEFAULT 'system_admin',
+  roles_json TEXT DEFAULT '["system_admin"]',
+  expires_at TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS exam_owner_bootstrap_state (
+  state_key TEXT PRIMARY KEY,
+  owner_email TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'armed',
+  used_count INTEGER NOT NULL DEFAULT 0,
+  max_uses INTEGER NOT NULL DEFAULT 1,
+  claimed_session_hash TEXT,
+  claimed_at TEXT,
+  locked_at TEXT,
+  locked_by_ip TEXT DEFAULT '',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Seed Immutable Supreme System Owner (Chủ sở hữu hệ thống tối cao: skyfirst.ec@gmail.com)
-INSERT OR IGNORE INTO users (id, full_name, sfn_id, email, status)
-VALUES ('owner-skyfirst-ec', 'Chủ Sở Hữu Hệ Thống Sky First', 'SFO-0001', 'skyfirst.ec@gmail.com', 'active');
+INSERT OR REPLACE INTO exam_admin_accounts (email, user_id, full_name, sfn_id, status, role, roles_json, expires_at, updated_at)
+VALUES ('skyfirst.ec@gmail.com', COALESCE((SELECT id FROM users WHERE LOWER(email)='skyfirst.ec@gmail.com' LIMIT 1), 'owner-skyfirst-ec'), 'Chủ Sở Hữu Hệ Thống Sky First', 'SFO-0001', 'active', 'system_owner', '["system_owner","system_admin"]', NULL, CURRENT_TIMESTAMP);
+
+INSERT OR IGNORE INTO exam_owner_bootstrap_state (state_key, owner_email, status, used_count, max_uses, locked_at, updated_at)
+VALUES ('supreme_owner_first_login', 'skyfirst.ec@gmail.com', 'armed', 0, 1, NULL, CURRENT_TIMESTAMP);
+
 UPDATE users SET status='active' WHERE LOWER(email)='skyfirst.ec@gmail.com';

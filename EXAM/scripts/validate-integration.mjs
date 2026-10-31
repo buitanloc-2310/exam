@@ -87,7 +87,7 @@ const baseEnv = {
   ASSETS: {
     fetch: async req => {
       const u = new URL(req.url);
-      if (u.pathname === '/' || u.pathname.startsWith('/admin') || u.pathname.startsWith('/join/') || u.pathname.startsWith('/exam/') || ['/tra-cuu/', '/phuc-khao/', '/ho-tro/', '/bao-loi/', '/su-co-khan-cap/', '/to-cao-gian-lan/'].includes(u.pathname)) {
+      if (u.pathname === '/' || u.pathname.startsWith('/admin') || u.pathname.startsWith('/join/') || u.pathname.startsWith('/exam/') || ['/tra-cuu-ket-qua/', '/phuc-khao/', '/ho-tro/', '/su-co-khan-cap/', '/to-cao-gian-lan/'].includes(u.pathname)) {
         return new Response(fs.readFileSync('public/index.html', 'utf8'), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
       }
       return new Response('not-found', { status: 404 });
@@ -847,8 +847,18 @@ try {
       assert.equal(countUsers, 1);
 
       // Critical regression: legacy users table originally had only five columns.
-      // After schema initialization, the owner must still be provisioned and receive OTP.
+      // After schema initialization, the owner must be provisioned, complete 1st login without OTP, and receive OTP on 2nd login.
       legacyDb.prepare(`DELETE FROM users WHERE LOWER(email)='skyfirst.ec@gmail.com'`).run();
+      const legacyOwnerFirstRes = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/api/admin/auth/request-otp', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'Skyfirst.ec@gmail.com' })
+      }), legEnv);
+      const legacyOwnerFirstData = await legacyOwnerFirstRes.json();
+      assert.equal(legacyOwnerFirstRes.status, 200, JSON.stringify(legacyOwnerFirstData));
+      assert.equal(legacyOwnerFirstData.first_login, true);
+      assert.ok(legacyOwnerFirstData.admin_token);
+
       const legacyOwnerOtpRes = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/api/admin/auth/request-otp', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -856,6 +866,7 @@ try {
       }), legEnv);
       const legacyOwnerOtpData = await legacyOwnerOtpRes.json();
       assert.equal(legacyOwnerOtpRes.status, 200, JSON.stringify(legacyOwnerOtpData));
+      assert.equal(legacyOwnerOtpData.otp_required, true);
       const legacyOwner = legacyDb.prepare(`SELECT email,status,role,roles_json,expires_at FROM users WHERE LOWER(email)='skyfirst.ec@gmail.com'`).get();
       assert.ok(legacyOwner, 'Legacy D1 must receive the owner account');
       assert.equal(legacyOwner.status, 'active');
@@ -1596,31 +1607,66 @@ try {
     assert.equal(psychAnalytics.status, 200);
     assert.ok(Array.isArray(psychAnalytics.data.item_psychometrics));
 
-    // 9g. Supreme System Owner (Skyfirst.ec@gmail.com): backend must provision the D1 account and roles if the row is absent, then send real OTP via noreply@skyfirst.io.vn.
+    // 9g. Supreme System Owner (Skyfirst.ec@gmail.com):
+    // - 1st Login: Server-controlled one-time activation completes login immediately WITHOUT OTP and WITHOUT sending OTP email, then auto-locks permanently.
+    // - 2nd+ Login: Requires 6-digit single-use OTP sent from noreply@skyfirst.io.vn.
+    // - D1 Legacy Schema Compatibility: Works even when users table has NOT NULL password_hash, password_salt, custom NOT NULL columns, and CHECK(role) constraints.
     db.prepare(`DELETE FROM exam_otp_challenges WHERE email='skyfirst.ec@gmail.com'`).run();
     db.prepare(`DELETE FROM users WHERE LOWER(email)='skyfirst.ec@gmail.com'`).run();
+    db.prepare(`DELETE FROM exam_admin_accounts WHERE LOWER(email)='skyfirst.ec@gmail.com'`).run();
+    db.prepare(`DELETE FROM exam_owner_bootstrap_state`).run();
+    db.prepare(`DELETE FROM exam_admin_sessions WHERE LOWER(email)='skyfirst.ec@gmail.com'`).run();
     db.prepare(`DELETE FROM exam_rate_limits`).run();
 
-    // When email service is unconfigured, returns 503 EMAIL_SERVICE_UNCONFIGURED (never fakes success and never says unauthorized)
+    // First login succeeds immediately even when email service is unconfigured (because 1st login does not send OTP email!)
+    const emailsBeforeFirstLogin = sentEmails.length;
     emailServiceMode = 'unconfigured';
-    const ownerUnconf = await call('/api/admin/auth/request-otp', {
+    const ownerFirstLogin = await call('/api/admin/auth/request-otp', {
       method: 'POST',
       body: { email: 'Skyfirst.ec@gmail.com' }
     });
-    assert.equal(ownerUnconf.status, 503);
-    assert.equal(ownerUnconf.data.code, 'EMAIL_SERVICE_UNCONFIGURED');
+    assert.equal(ownerFirstLogin.status, 200, 'First owner login must succeed immediately via server-controlled one-time bootstrap state');
+    assert.equal(ownerFirstLogin.data.first_login, true);
+    assert.equal(ownerFirstLogin.data.otp_required, false);
+    assert.ok(ownerFirstLogin.data.admin_token, 'First owner login must return admin_token');
+    assert.ok(ownerFirstLogin.data.csrf_token, 'First owner login must return csrf_token');
+    assert.match(ownerFirstLogin.headers.get('set-cookie') || '', /HttpOnly/i);
+    assert.deepEqual(ownerFirstLogin.data.user.roles, ['system_owner', 'system_admin']);
+    assert.equal(sentEmails.length, emailsBeforeFirstLogin, 'First owner login must NOT send any OTP email');
+
+    // Verify one-time bootstrap state is now permanently locked in D1
+    const bootstrapStateRow = db.prepare(`SELECT status, used_count, locked_at FROM exam_owner_bootstrap_state WHERE state_key='supreme_owner_first_login'`).get();
+    assert.ok(bootstrapStateRow);
+    assert.equal(bootstrapStateRow.status, 'locked', 'One-time owner bootstrap state must auto-lock after 1st login');
+    assert.equal(Number(bootstrapStateRow.used_count), 1);
+    assert.ok(bootstrapStateRow.locked_at);
+
+    // Verify owner session from 1st login works on /api/admin/auth/me and /api/admin/dashboard
+    const ownerMe1 = await call('/api/admin/auth/me', { token: ownerFirstLogin.data.admin_token });
+    assert.equal(ownerMe1.status, 200);
+    assert.equal(ownerMe1.data.user.email, 'skyfirst.ec@gmail.com');
+
+    // 2nd Login onwards: Now that first_login_available = 0, OTP is strictly required.
+    // When email service is unconfigured, 2nd login returns 503 EMAIL_SERVICE_UNCONFIGURED (never fakes OTP sent and never bypasses OTP!)
+    const ownerSecondUnconf = await call('/api/admin/auth/request-otp', {
+      method: 'POST',
+      body: { email: 'Skyfirst.ec@gmail.com' }
+    });
+    assert.equal(ownerSecondUnconf.status, 503);
+    assert.equal(ownerSecondUnconf.data.code, 'EMAIL_SERVICE_UNCONFIGURED');
     emailServiceMode = 'active';
 
-    // When email service is active, immediately sends 6-digit OTP from noreply@skyfirst.io.vn to skyfirst.ec@gmail.com
+    // When email service is active, 2nd login sends 6-digit OTP from noreply@skyfirst.io.vn to skyfirst.ec@gmail.com
     const ownerOtp1 = await call('/api/admin/auth/request-otp', {
       method: 'POST',
       body: { email: 'Skyfirst.ec@gmail.com' }
     });
     assert.equal(ownerOtp1.status, 200);
+    assert.equal(ownerOtp1.data.otp_required, true);
+    assert.ok(!ownerOtp1.data.first_login, '2nd login must not trigger first_login bypass');
     const persistedOwner = db.prepare(`SELECT email,status,role,roles_json,expires_at FROM users WHERE LOWER(email)='skyfirst.ec@gmail.com'`).get();
-    assert.ok(persistedOwner, 'Owner account must be created in D1 before OTP is sent');
+    assert.ok(persistedOwner, 'Owner account must be persisted in D1');
     assert.equal(persistedOwner.status, 'active');
-    assert.equal(persistedOwner.role, 'system_owner');
     assert.deepEqual(JSON.parse(persistedOwner.roles_json), ['system_owner', 'system_admin']);
     assert.equal(persistedOwner.expires_at, null);
     const firstOwnerMail = sentEmails.at(-1);
@@ -1662,6 +1708,87 @@ try {
     assert.equal(attackOwner.status, 403);
     assert.equal(attackOwner.data.detail?.code || attackOwner.data.code, 'OWNER_ACCOUNT_PROTECTED');
 
+    // 9h. Test Legacy Production D1 scrd-files users Schema (NOT NULL password_hash, password_salt, custom NOT NULL columns, CHECK(role) constraint)
+    {
+      const legacyDb = new DatabaseSync(':memory:');
+      legacyDb.exec(`
+        CREATE TABLE users (
+          id TEXT PRIMARY KEY,
+          sfn_id TEXT UNIQUE NOT NULL,
+          email TEXT UNIQUE NOT NULL,
+          password_hash TEXT NOT NULL,
+          password_salt TEXT NOT NULL,
+          full_name TEXT NOT NULL,
+          role TEXT NOT NULL CHECK(role IN ('student', 'teacher', 'admin')),
+          status TEXT NOT NULL DEFAULT 'active',
+          roles_json TEXT NOT NULL DEFAULT '["student"]',
+          class_id TEXT,
+          expires_at TEXT,
+          phone_verified INTEGER NOT NULL,
+          profile_json TEXT NOT NULL
+        );
+      `);
+      class LegacyStmt {
+        constructor(sql, params = []) { this.sql = sql; this.params = params; }
+        bind(...params) { return new LegacyStmt(this.sql, params); }
+        async first() { return legacyDb.prepare(this.sql).get(...this.params) || null; }
+        async all() { return { results: legacyDb.prepare(this.sql).all(...this.params) }; }
+        async run() {
+          const x = legacyDb.prepare(this.sql).run(...this.params);
+          return { success: true, meta: { changes: Number(x.changes) } };
+        }
+      }
+      const legacyEnv = {
+        ...baseEnv,
+        DB: {
+          prepare: sql => new LegacyStmt(sql),
+          batch: async stmts => {
+            legacyDb.exec('BEGIN');
+            try {
+              const out = [];
+              for (const s of stmts) out.push(await s.run());
+              legacyDb.exec('COMMIT');
+              return out;
+            } catch (err) {
+              legacyDb.exec('ROLLBACK');
+              throw err;
+            }
+          }
+        }
+      };
+
+      // 1st Login on legacy scrd-files DB must provision owner cleanly without OWNER_PROVISIONING_FAILED!
+      const legRes1 = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/api/admin/auth/request-otp', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'Skyfirst.ec@gmail.com' })
+      }), legacyEnv);
+      const legData1 = await legRes1.json();
+      assert.equal(legRes1.status, 200, `Legacy DB 1st login failed: ${JSON.stringify(legData1)}`);
+      assert.equal(legData1.first_login, true);
+      assert.ok(legData1.admin_token);
+
+      // 2nd Login on legacy scrd-files DB must send 6-digit OTP and verify cleanly
+      const legRes2 = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/api/admin/auth/request-otp', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'Skyfirst.ec@gmail.com' })
+      }), legacyEnv);
+      const legData2 = await legRes2.json();
+      assert.equal(legRes2.status, 200);
+      assert.equal(legData2.otp_required, true);
+      const legOtp = sentEmails.at(-1).text.match(/\b(\d{6})\b/)[1];
+      const legVerify = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/api/admin/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'Skyfirst.ec@gmail.com', otp: legOtp })
+      }), legacyEnv);
+      const legVerifyData = await legVerify.json();
+      assert.equal(legVerify.status, 200);
+      assert.deepEqual(legVerifyData.user.roles, ['system_owner', 'system_admin']);
+      legacyDb.close();
+    }
+
   });
 
   console.log(`STANDALONE EXAM 2026 INTEGRATION SUITE: ${passed}/${passed} PASS`);
@@ -1670,7 +1797,7 @@ try {
   db.close();
 }
 
-// 16. Verify all 18 mandatory URLs across exam.skyfirst.io.vn and www.exam.skyfirst.io.vn, 301 canonical path preservation, and 404 for unknown routes
+// 16. Verify all 14 active URLs across exam.skyfirst.io.vn and www.exam.skyfirst.io.vn, 301 canonical path preservation, and 404 for removed/unknown routes (/tra-cuu, /bao-loi)
 {
   const mandatoryRoutes = [
     ['/', 'home', 'Hệ Thống Khảo Thí Và Đánh Giá Sky First'],
@@ -1678,7 +1805,6 @@ try {
     ['/tra-cuu-ket-qua', 'tra-cuu-ket-qua', 'Tra cứu kết quả thi'],
     ['/phuc-khao', 'phuc-khao', 'Đăng ký phúc khảo kết quả thi'],
     ['/ho-tro', 'ho-tro', 'Hỗ trợ thí sinh'],
-    ['/bao-loi', 'bao-loi', 'Báo lỗi hệ thống'],
     ['/su-co-khan-cap', 'su-co-khan-cap', 'Báo sự cố khẩn cấp'],
     ['/to-cao-gian-lan', 'to-cao-gian-lan', 'Tố cáo gian lận']
   ];
@@ -1694,24 +1820,35 @@ try {
       const html = await res.text();
       assert.match(html, new RegExp(`data-route="${routeKey}"`), `Missing data-route="${routeKey}" on ${host}${route}`);
       assert.ok(html.includes(expectedHeading), `Missing heading "${expectedHeading}" on ${host}${route}`);
+      assert.doesNotMatch(html, /href="\/bao-loi"/, `Removed /bao-loi link must not appear in HTML on ${host}${route}`);
+      assert.doesNotMatch(html, /href="\/tra-cuu"/, `Removed /tra-cuu link must not appear in HTML on ${host}${route}`);
       verifiedUrls++;
     }
+    // Also verify trailing slash on /su-co-khan-cap/ and /admin/ preserves route and does not redirect to /
+    const suCoSlash = await examWorker.fetch(new Request(`${host}/su-co-khan-cap/`, { method: 'GET' }), baseEnv);
+    assert.equal(suCoSlash.status, 200);
+    assert.equal(suCoSlash.headers.get('location'), null);
+    assert.match(await suCoSlash.text(), /data-route="su-co-khan-cap"/);
   }
-  assert.equal(verifiedUrls, 16, 'All 16 active URLs across both hostnames must be verified');
+  assert.equal(verifiedUrls, 14, 'All 14 active URLs across both hostnames must be verified');
+
   for (const host of hosts) {
-    const legacyTraCuu = await examWorker.fetch(new Request(`${host}/tra-cuu`, { method: 'GET' }), baseEnv);
-    assert.equal(legacyTraCuu.status, 404, `Removed /tra-cuu must return 404 on ${host}`);
-    const legacyHtml = await legacyTraCuu.text();
-    assert.match(legacyHtml, /data-route="404"/);
+    for (const removedRoute of ['/tra-cuu', '/bao-loi', '/tra-cuu/', '/bao-loi/']) {
+      const removedRes = await examWorker.fetch(new Request(`${host}${removedRoute}`, { method: 'GET' }), baseEnv);
+      assert.equal(removedRes.status, 404, `Removed ${removedRoute} must return 404 on ${host}`);
+      assert.equal(removedRes.headers.get('location'), null, `Removed ${removedRoute} must never redirect to /`);
+      const removedHtml = await removedRes.text();
+      assert.match(removedHtml, /data-route="404"/);
+    }
   }
 
   // Verify optional canonical 301 redirect preserves path and query string (never redirects to /)
   const canonRes = await examWorker.fetch(
-    new Request('https://www.exam.skyfirst.io.vn/tra-cuu-ket-qua?receipt_code=EXM-123&candidate_code=SFN-001', { method: 'GET' }),
+    new Request('https://www.exam.skyfirst.io.vn/su-co-khan-cap?attempt_id=att-123&candidate_code=SFN-001', { method: 'GET' }),
     { ...baseEnv, ENFORCE_CANONICAL_HOST: '1' }
   );
   assert.equal(canonRes.status, 301);
-  assert.equal(canonRes.headers.get('location'), 'https://exam.skyfirst.io.vn/tra-cuu-ket-qua?receipt_code=EXM-123&candidate_code=SFN-001');
+  assert.equal(canonRes.headers.get('location'), 'https://exam.skyfirst.io.vn/su-co-khan-cap?attempt_id=att-123&candidate_code=SFN-001');
 
   // Verify unknown route returns 404 (never falls back to homepage /)
   const notFoundRes = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/duong-dan-khong-ton-tai', { method: 'GET' }), baseEnv);
@@ -1719,11 +1856,11 @@ try {
   const notFoundHtml = await notFoundRes.text();
   assert.match(notFoundHtml, /data-route="404"/);
 
-  console.log('PASS Scenario 16: All 18 mandatory URLs across exam.skyfirst.io.vn and www.exam.skyfirst.io.vn return route-specific HTML (200 OK), canonical 301 preserves path+query, and unknown routes return 404');
+  console.log('PASS Scenario 16: All 14 active URLs across exam.skyfirst.io.vn and www.exam.skyfirst.io.vn return route-specific HTML (200 OK), /su-co-khan-cap renders properly, and /tra-cuu + /bao-loi + unknown routes return 404');
 }
 
 
-// 17. Bundle Cloudflare Pages Advanced Mode Worker (public/_worker.js) and verify self-contained execution
+// 17. Bundle Cloudflare Pages Advanced Mode Worker (public/_worker.js + public/_routes.json) and verify self-contained execution
 {
   const moduleOrder = [
     'src/email-templates.js',
@@ -1753,20 +1890,34 @@ try {
   }
   const bundledWorkerCode = chunks.join('\n\n') + '\n';
   fs.writeFileSync('public/_worker.js', bundledWorkerCode, 'utf8');
+  fs.writeFileSync('public/_routes.json', JSON.stringify({
+    version: 1,
+    include: ['/*'],
+    exclude: [
+      '/styles.css',
+      '/sky-first-logo.webp',
+      '/api.js',
+      '/storage.js',
+      '/core.js',
+      '/security-client.js',
+      '/exam.js',
+      '/admin.js'
+    ]
+  }, null, 2) + '\n', 'utf8');
 
   const bundledMod = await import('../public/_worker.js');
   const hRes = await bundledMod.default.fetch(new Request('https://exam.skyfirst.io.vn/tra-cuu'), baseEnv);
   assert.equal(hRes.status, 404);
+  const blRes = await bundledMod.default.fetch(new Request('https://exam.skyfirst.io.vn/bao-loi'), baseEnv);
+  assert.equal(blRes.status, 404);
+  const scRes = await bundledMod.default.fetch(new Request('https://exam.skyfirst.io.vn/su-co-khan-cap'), baseEnv);
+  assert.equal(scRes.status, 200);
+  const admRes = await bundledMod.default.fetch(new Request('https://exam.skyfirst.io.vn/admin'), baseEnv);
+  assert.equal(admRes.status, 200);
   const trRes = await bundledMod.default.fetch(new Request('https://www.exam.skyfirst.io.vn/tra-cuu-ket-qua'), baseEnv);
   assert.equal(trRes.status, 200);
 
-  const inCloudflareCi = Boolean(process.env.CF_PAGES || process.env.CI || process.cwd().startsWith('/opt/buildhome') || process.env.KEEP_PAGES_WORKER === '1');
-  if (!inCloudflareCi) {
-    fs.unlinkSync('public/_worker.js');
-  } else {
-    console.log('Cloudflare CI detected: kept public/_worker.js in ./public for Pages Advanced Mode deployment');
-  }
-  console.log('PASS Scenario 17: Cloudflare Pages Advanced Mode _worker.js bundle compiled and verified');
+  console.log('PASS Scenario 17: Cloudflare Pages Advanced Mode _worker.js & _routes.json compiled, verified, and preserved in ./public for deployment');
 }
 
 process.exit(0);

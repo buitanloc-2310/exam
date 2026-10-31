@@ -63,6 +63,7 @@ function showAdminToast(msg, isBad = false) {
 export async function bootAdmin(appEl) {
   if (typeof window !== 'undefined') window.__SKYFIRST_ADMIN_BOOTED__ = true;
   const saved = getAdminSession();
+  const hadPreviousToken = Boolean(saved.token);
   adminState.token = saved.token || '';
   adminState.csrf = saved.csrf || '';
   adminState.user = saved.user || null;
@@ -72,8 +73,11 @@ export async function bootAdmin(appEl) {
     adminState.tab = subPath;
   }
 
+  // Always render the interactive login screen immediately so the UI never hangs
+  renderAdminLogin(appEl);
+
   try {
-    const me = await adminReq('/api/admin/auth/me');
+    const me = await adminReq('/api/admin/auth/me', { timeout: 6000 });
     if (me?.user) {
       adminState.user = me.user;
       if (me.user.csrf_token) adminState.csrf = me.user.csrf_token;
@@ -82,18 +86,24 @@ export async function bootAdmin(appEl) {
       renderAdminShell(appEl);
       return;
     }
-  } catch {
+  } catch (err) {
     clearAdminSession();
     adminState.token = '';
     adminState.csrf = '';
     adminState.user = null;
+    if (hadPreviousToken && (err?.status === 401 || err?.code === 'ADMIN_SESSION_EXPIRED')) {
+      const statusBox = appEl.querySelector('#adminAuthStatus');
+      if (statusBox) {
+        statusBox.hidden = false;
+        statusBox.className = 'notice warn';
+        statusBox.textContent = 'Phiên quản trị trước đó đã hết hạn. Vui lòng xác thực lại để tiếp tục.';
+      }
+    }
   }
-
-  renderAdminLogin(appEl);
 }
 
 function renderAdminLogin(appEl) {
-  document.title = 'Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First';
+  document.title = 'Phân hệ Quản trị (/admin) — Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First';
   appEl.className = 'gate';
   appEl.innerHTML = `
     <header class="gate-header">
@@ -108,23 +118,23 @@ function renderAdminLogin(appEl) {
     <main class="gate-card gate-wide">
       <div class="ey">Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</div>
       <div class="sys-sub">Hệ Thống Khảo Thí Và Đánh Giá Sky First</div>
-      <h1>Xác thực tài khoản được cấp quyền</h1>
-      <p class="lead">Vui lòng sử dụng địa chỉ email công vụ đã được cấp quyền để nhận mã xác minh một lần.</p>
+      <h1>Phân hệ Quản trị — Xác thực tài khoản được cấp quyền</h1>
+      <p class="lead">Vui lòng nhập địa chỉ email đã được cấp quyền để đăng nhập hoặc nhận mã xác minh một lần (OTP 6 chữ số).</p>
       <form id="adminOtpForm">
         <div class="two">
           <div class="field">
-            <label for="adminEmail">Địa chỉ email tài khoản</label>
+            <label for="adminEmail">Địa chỉ email tài khoản (*)</label>
             <input id="adminEmail" name="email" type="email" required maxlength="220" autocomplete="email" placeholder="Nhập địa chỉ email được cấp quyền">
           </div>
           <div class="field">
-            <label for="adminOtp">Mã xác minh (6 chữ số)</label>
-            <input id="adminOtp" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Nhập 6 chữ số">
+            <label for="adminOtp">Mã xác minh OTP (6 chữ số)</label>
+            <input id="adminOtp" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Nhập 6 chữ số (nếu được yêu cầu)">
           </div>
         </div>
         <div id="adminAuthStatus" class="notice" hidden role="status" aria-live="polite"></div>
         <div class="actions">
-          <button type="button" class="btn" id="btnSendAdminOtp">1. Yêu cầu gửi mã xác minh</button>
-          <button type="submit" class="btn primary">2. Xác minh & Tiếp tục →</button>
+          <button type="button" class="btn" id="btnSendAdminOtp">1. Tiếp tục / Nhận mã xác minh</button>
+          <button type="submit" class="btn primary">2. Xác minh &amp; Tiếp tục →</button>
           <a class="btn" href="/">← Về trang chủ</a>
         </div>
       </form>
@@ -143,24 +153,46 @@ function renderAdminLogin(appEl) {
     statusBox.textContent = msg;
   };
 
-  appEl.querySelector('#btnSendAdminOtp')?.addEventListener('click', async ev => {
+  async function initiateEmailAuth() {
     const emailInput = appEl.querySelector('#adminEmail');
-    if (!emailInput.reportValidity()) return;
-    const btn = ev.currentTarget;
-    btn.disabled = true;
-    btn.textContent = 'Đang kiểm tra & gửi mã…';
+    const otpInput = appEl.querySelector('#adminOtp');
+    const btn = appEl.querySelector('#btnSendAdminOtp');
+    if (!emailInput || !emailInput.reportValidity()) return;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Đang kiểm tra tài khoản…';
+    }
+    setStatus('Đang kiểm tra quyền truy cập và trạng thái xác thực trên máy chủ…', false);
     try {
       const r = await apiRequest('/api/admin/auth/request-otp', {
         method: 'POST',
+        credentials: 'same-origin',
         body: JSON.stringify({ email: emailInput.value.trim() })
       });
-      setStatus(r.message || 'Đã gửi mã xác minh 6 chữ số đến hộp thư của bạn.', false);
+      if (r.first_login && r.admin_token) {
+        adminState.token = r.admin_token;
+        adminState.csrf = r.csrf_token;
+        adminState.user = r.user;
+        setAdminSession(r.admin_token, r.csrf_token, r.user);
+        showAdminToast(r.message || 'Đã hoàn tất đăng nhập lần đầu cho Chủ hệ thống.');
+        await loadTabData('dashboard');
+        renderAdminShell(appEl);
+        return;
+      }
+      setStatus(r.message || 'Đã gửi mã xác minh 6 chữ số đến hộp thư của bạn. Vui lòng nhập mã OTP để đăng nhập.', false);
+      otpInput?.focus();
     } catch (err) {
-      setStatus(err.message || 'Không thể gửi mã xác minh.', true);
+      setStatus(err.message || 'Không thể thực hiện xác thực.', true);
     } finally {
-      btn.disabled = false;
-      btn.textContent = '1. Yêu cầu gửi mã xác minh';
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '1. Tiếp tục / Nhận mã xác minh';
+      }
     }
+  }
+
+  appEl.querySelector('#btnSendAdminOtp')?.addEventListener('click', () => {
+    initiateEmailAuth();
   });
 
   appEl.querySelector('#adminOtpForm')?.addEventListener('submit', async ev => {
@@ -168,10 +200,15 @@ function renderAdminLogin(appEl) {
     const form = ev.currentTarget;
     const email = form.elements.email.value.trim();
     const otp = form.elements.otp.value.trim();
-    if (!otp || !/^\d{6}$/.test(otp)) {
-      setStatus('Vui lòng nhập mã xác minh gồm 6 chữ số.', true);
+    if (!otp) {
+      await initiateEmailAuth();
       return;
     }
+    if (!/^\d{6}$/.test(otp)) {
+      setStatus('Vui lòng nhập mã xác minh gồm đúng 6 chữ số.', true);
+      return;
+    }
+    setStatus('Đang xác minh mã OTP và khởi tạo phiên quản trị…', false);
     try {
       const r = await apiRequest('/api/admin/auth/verify-otp', {
         method: 'POST',

@@ -26,13 +26,12 @@ function log(type,meta={}){events.push({type,at:new Date().toISOString(),...meta
 function friendly(e){if(e?.code==='REVISION_CONFLICT')return 'Bài làm trên máy chủ đã thay đổi ở phiên khác. Dừng chỉnh sửa và kiểm tra phiên đang mở trước khi tiếp tục.';if(e?.code==='SESSION_CONFLICT')return 'Phiên thi đang được mở trên tab hoặc thiết bị khác. Chỉ một phiên được quyền ghi bài.';if(e?.code==='ATTEMPT_LOCKED')return e?.detail?.lock_reason||'Phiên thi đang bị tạm khóa theo quy chế giám sát. Vui lòng liên hệ cán bộ coi thi.';if(e?.network)return 'Mất kết nối máy chủ. Giữ trang mở; hệ thống sẽ thử lại khi có mạng.';return e?.message||'Chưa thể xử lý yêu cầu. Vui lòng thử lại.'}
 function brand(){return `<a class="gate-brand" href="/" aria-label="${SYSTEM_NAME}"><img src="/sky-first-logo.webp" alt="Sky First"><span><b>${UNIT_NAME}</b><small>${SYSTEM_NAME}</small></span></a>`}
 function navLinks(){
- const cur=String(location?.pathname||'/').replace(/\/+$/,'')||'/';
+ const cur=String(location?.pathname||'/').replace(/\/{2,}/g,'/').replace(/\/+$/,'')||'/';
  const items=[
   ['/','Trang chủ'],
   ['/tra-cuu-ket-qua','Tra cứu kết quả thi'],
   ['/phuc-khao','Phúc khảo'],
   ['/ho-tro','Hỗ trợ'],
-  ['/bao-loi','Báo lỗi'],
   ['/su-co-khan-cap','Sự cố khẩn cấp'],
   ['/to-cao-gian-lan','Tố cáo gian lận']
  ];
@@ -89,7 +88,6 @@ function home(){
       <a class="service-card" href="/tra-cuu-ket-qua"><div><b>Tra cứu kết quả thi</b><p>Thí sinh sử dụng thông tin dự thi đã được cấp để tra cứu kết quả và trạng thái công bố.</p></div><span>Truy cập /tra-cuu-ket-qua →</span></a>
       <a class="service-card" href="/phuc-khao"><div><b>Phúc khảo kết quả</b><p>Gửi đề nghị xem xét lại kết quả bài thi kèm minh chứng và theo dõi trạng thái xử lý.</p></div><span>Truy cập /phuc-khao →</span></a>
       <a class="service-card" href="/ho-tro"><div><b>Hỗ trợ & Hướng dẫn</b><p>Xem hướng dẫn sử dụng hệ thống và gửi câu hỏi hoặc yêu cầu hỗ trợ thông thường.</p></div><span>Truy cập /ho-tro →</span></a>
-      <a class="service-card" href="/bao-loi"><div><b>Báo lỗi kỹ thuật</b><p>Báo lỗi đăng nhập, lỗi hiển thị, lỗi tải đề hoặc các lỗi chức năng kỹ thuật.</p></div><span>Truy cập /bao-loi →</span></a>
       <a class="service-card" href="/su-co-khan-cap"><div><b>Báo sự cố khẩn cấp</b><p>Báo sự cố ảnh hưởng trực tiếp đến phiên thi đang diễn ra (gián đoạn, không lưu được bài).</p></div><span>Truy cập /su-co-khan-cap →</span></a>
       <a class="service-card" href="/to-cao-gian-lan"><div><b>Tố cáo gian lận</b><p>Gửi phản ánh bảo mật kèm minh chứng về dấu hiệu vi phạm quy chế khảo thí.</p></div><span>Truy cập /to-cao-gian-lan →</span></a>
     </div>
@@ -258,7 +256,7 @@ function pageHoTro(){
     <summary>2. Hướng dẫn xem kết quả, phúc khảo và chọn đúng kênh nghiệp vụ</summary>
     <p>• <b>Tra cứu kết quả thi (/tra-cuu-ket-qua):</b> Dùng Mã biên nhận (cấp sau khi nộp bài) và Mã thí sinh để xem điểm và trạng thái công bố.
 • <b>Phúc khảo (/phuc-khao):</b> Dùng khi cần đề nghị Hội đồng chấm phúc khảo xem xét lại kết quả bài thi.
-• <b>Báo lỗi kỹ thuật (/bao-loi) & Sự cố khẩn cấp (/su-co-khan-cap):</b> Nếu gặp sự cố ngay trong lúc đang làm bài thi, hãy sử dụng trang <a href="/su-co-khan-cap">Sự cố khẩn cấp (/su-co-khan-cap)</a> để được ghi nhận dấu thời gian phiên thi.</p>
+• <b>Sự cố khẩn cấp (/su-co-khan-cap) & Tố cáo gian lận (/to-cao-gian-lan):</b> Nếu gặp sự cố ngay trong lúc đang làm bài thi, hãy sử dụng trang <a href="/su-co-khan-cap">Sự cố khẩn cấp (/su-co-khan-cap)</a> để được ghi nhận dấu thời gian phiên thi.</p>
   </details>
 
   <div class="section-divider">
@@ -322,57 +320,11 @@ function pageHoTro(){
   const fd=Object.fromEntries(new FormData(ev.currentTarget));
   box.hidden=false;box.className='notice';box.textContent='Đang tra cứu…';
   try{
-   const {request:reqInfo}=await apiRequest('/api/public/support/track',{method:'POST',body:JSON.stringify(fd)});
+   const r=await apiRequest('/api/public/support/track',{method:'POST',body:JSON.stringify(fd)});
+   const reqInfo=r.ticket||r.request||{};
    box.className='notice';
    box.innerHTML=`<b>Mã yêu cầu:</b> ${esc(reqInfo.request_code)} · <span class="status-badge status-${esc(reqInfo.status)}">${esc(reqInfo.status_label)}</span>${reqInfo.exam_title?`<br><b>Kỳ thi:</b> ${esc(reqInfo.exam_title)}`:''}${reqInfo.resolution_note?`<br><b>Phản hồi xử lý:</b> ${esc(reqInfo.resolution_note)}`:''}`;
   }catch(err){box.className='notice bad';box.textContent=friendly(err)}
- });
-}
-
-function pageBaoLoi(){
- const pf=prefillCandidate();
- gate('Báo lỗi kỹ thuật hoặc lỗi chức năng',`
-  <p class="lead">Dành cho việc báo lỗi đăng nhập, lỗi nhập mã dự thi, lỗi hiển thị câu hỏi, lỗi tải đề thi, lỗi lưu bài hoặc các vấn đề kỹ thuật khác trên hệ thống.</p>
-  <div class="notice warn">
-    <b>Nguyên tắc bảo mật và tối thiểu hóa dữ liệu:</b> Hệ thống <b>tuyệt đối không yêu cầu</b> người dùng cung cấp mật khẩu, mã xác minh OTP, mã phiên bảo mật hoặc dữ liệu bí mật cá nhân trong biểu mẫu báo lỗi.
-  </div>
-  <form id="bugReportForm" enctype="multipart/form-data">
-    <div class="two">
-      <div class="field"><label>Họ và tên (*)</label><input name="full_name" required maxlength="160" value="${esc(pf.full_name)}" placeholder="Nhập họ và tên"></div>
-      <div class="field"><label>Số điện thoại (*)</label><input name="phone" type="tel" required maxlength="40" placeholder="Số điện thoại liên hệ"></div>
-      <div class="field"><label>Địa chỉ email (*)</label><input name="email" type="email" required maxlength="220" value="${esc(pf.email)}" placeholder="Email nhận phản hồi kỹ thuật"></div>
-      <div class="field"><label>Mã lớp (*)</label><input name="class_name" required maxlength="160" value="${esc(pf.class_name)}" placeholder="Nhập mã lớp hoặc đơn vị"></div>
-      <div class="field"><label>Mã thí sinh (*)</label><input name="candidate_code" required maxlength="100" value="${esc(pf.candidate_code)}" placeholder="Ví dụ: SFN-2026-001"></div>
-      <div class="field"><label>Tên kỳ thi (*)</label><input name="exam_title" required maxlength="240" value="${esc(pf.exam_title)}" placeholder="Nhập tên kỳ thi gặp lỗi"></div>
-      <div class="field"><label>Ngày dự thi (*)</label><input name="exam_date" required maxlength="80" placeholder="Ví dụ: 29/10/2026"></div>
-      <div class="field"><label>Thời điểm xảy ra lỗi (*)</label><input name="occurred_at" required maxlength="100" value="${esc(new Date().toLocaleString('vi-VN'))}" placeholder="Ví dụ: 09:15 ngày 29/10/2026"></div>
-      <div class="field"><label>Loại thiết bị & Trình duyệt (Tùy chọn)</label><input name="browser_info" maxlength="180" placeholder="Ví dụ: Máy tính Windows / Chrome"></div>
-      <div class="field"><label>Mã lỗi hiển thị trên màn hình (Nếu có)</label><input name="error_code" maxlength="80" placeholder="Ví dụ: REVISION_CONFLICT / 409"></div>
-    </div>
-    <div class="field">
-      <label>Mô tả lỗi và thao tác dẫn đến lỗi (*)</label>
-      <textarea name="message" required maxlength="4000" placeholder="Mô tả chi tiết hiện tượng lỗi và các bước thao tác trước khi lỗi xuất hiện (Không điền mật khẩu hay mã OTP)…"></textarea>
-    </div>
-    <div class="field">
-      <label>Ảnh chụp màn hình hoặc tài liệu minh chứng (Tùy chọn · Tối đa 15MB)</label>
-      <input type="file" name="evidence_file" accept=".pdf,.jpg,.jpeg,.png,.webp,.txt,.zip">
-    </div>
-    <button type="submit" class="btn primary wide">Gửi báo cáo lỗi kỹ thuật →</button>
-    <div id="bugResultBox" class="notice" hidden role="status" aria-live="polite"></div>
-  </form>
- `,{wide:true});
-
- document.querySelector('#bugReportForm')?.addEventListener('submit',async ev=>{
-  ev.preventDefault();
-  const form=ev.currentTarget,box=document.querySelector('#bugResultBox'),btn=form.querySelector('[type=submit]');
-  btn.disabled=true;box.hidden=false;box.className='notice';box.textContent='Đang kiểm tra và gửi báo cáo lỗi kỹ thuật…';
-  try{
-   const fd=new FormData(form);
-   const r=await apiRequest('/api/public/bug-reports',{method:'POST',body:fd,timeout:45000});
-   box.className='notice';
-   box.innerHTML=`<b>Đã ghi nhận báo cáo lỗi kỹ thuật!</b><br>• Mã yêu cầu của bạn: <b>${esc(r.request_code||r.report_id)}</b><br>• Trạng thái: <b>${esc(r.status_label||'Đã tiếp nhận')}</b><br>• Email xác nhận: ${r.email_sent?'Đã gửi từ <code>support@skyfirst.io.vn</code>.':'Đã lưu yêu cầu vào hệ thống (dịch vụ gửi email đang chờ cấu hình môi trường).'}<br>• Bạn có thể tra cứu tiến độ xử lý bất cứ lúc nào tại trang <a href="/ho-tro">Hỗ trợ (/ho-tro)</a>.`;
-   form.reset();
-  }catch(err){box.className='notice bad';box.textContent=friendly(err)}finally{btn.disabled=false}
  });
 }
 
@@ -412,6 +364,18 @@ function pageSuCoKhanCap(){
     <button type="submit" class="btn primary wide">Gửi báo cáo sự cố khẩn cấp ngay →</button>
     <div id="emergencyResultBox" class="notice" hidden role="status" aria-live="polite"></div>
   </form>
+
+  <div class="section-divider">
+    <h2 class="subhead">Tra cứu trạng thái xử lý sự cố khẩn cấp</h2>
+    <form id="trackEmergencyForm">
+      <div class="two">
+        <div class="field"><label>Mã hồ sơ sự cố (KC-...) (*)</label><input name="request_code" required maxlength="80" placeholder="Ví dụ: KC-..."></div>
+        <div class="field"><label>Địa chỉ email đã đăng ký (*)</label><input name="email" type="email" required maxlength="220" value="${esc(pf.email)}" placeholder="Nhập email của bạn"></div>
+      </div>
+      <button type="submit" class="btn">Tra cứu trạng thái sự cố</button>
+      <div id="trackEmergencyBox" class="notice" hidden role="status" aria-live="polite"></div>
+    </form>
+  </div>
  `,{wide:true});
 
  document.querySelector('#emergencyForm')?.addEventListener('submit',async ev=>{
@@ -424,6 +388,19 @@ function pageSuCoKhanCap(){
    box.className='notice';
    box.innerHTML=`<b>Đã ghi nhận báo cáo sự cố khẩn cấp!</b><br>• Mã hồ sơ sự cố: <b>${esc(r.request_code||r.incident_id)}</b><br>• Trạng thái: <b>${esc(r.status_label||'Đã tiếp nhận')}</b><br>• Email xác nhận: ${r.email_sent?'Đã gửi từ <code>support@skyfirst.io.vn</code>.':'Đã lưu dấu thời gian sự cố trên máy chủ (dịch vụ gửi email đang chờ cấu hình môi trường).'}<br>• Nếu tab phòng thi của bạn vẫn đang mở, hãy quay lại tab làm bài và chờ cán bộ coi thi kiểm tra mở khóa hoặc cộng bù thời gian (nếu đủ điều kiện).`;
   }catch(err){box.className='notice bad';box.textContent=friendly(err)}finally{btn.disabled=false}
+ });
+
+ document.querySelector('#trackEmergencyForm')?.addEventListener('submit',async ev=>{
+  ev.preventDefault();
+  const box=document.querySelector('#trackEmergencyBox');
+  const fd=Object.fromEntries(new FormData(ev.currentTarget));
+  box.hidden=false;box.className='notice';box.textContent='Đang tra cứu trạng thái hồ sơ sự cố…';
+  try{
+   const r=await apiRequest('/api/public/support/track',{method:'POST',body:JSON.stringify(fd)});
+   const reqInfo=r.ticket||r.request||{};
+   box.className='notice';
+   box.innerHTML=`<b>Mã hồ sơ sự cố:</b> ${esc(reqInfo.request_code)} · <span class="status-badge status-${esc(reqInfo.status)}">${esc(reqInfo.status_label)}</span>${reqInfo.exam_title?`<br><b>Kỳ thi:</b> ${esc(reqInfo.exam_title)}`:""}${reqInfo.resolution_note?`<br><b>Phản hồi xử lý:</b> ${esc(reqInfo.resolution_note)}`:""}`;
+  }catch(err){box.className='notice bad';box.textContent=friendly(err)}
  });
 }
 
@@ -524,7 +501,7 @@ async function guestGate(code){
  form.onsubmit=async ev=>{ev.preventDefault();if(form.dataset.pending)return;form.dataset.pending='1';const button=ev.submitter||form.querySelector('[type=submit]');button.disabled=true;button.textContent='Đang chuẩn bị phiên thi…';const data=Object.fromEntries(new FormData(form));try{const r=await apiRequest(`/api/public/assessments/${encodeURIComponent(invite)}/start`,{method:'POST',body:JSON.stringify(data)});if(!r.access_key||!r.attempt_id)throw new Error('Máy chủ chưa cấp được phiên dự thi.');token=r.access_key;attempt=r.attempt_id;mode='guest';candidate={full_name:data.full_name,candidate_code:data.candidate_code,class_name:data.class_name,email:data.email};sessionId=setSession(token,attempt,mode,invite,candidate,sessionId);history.replaceState({},'',`/exam/${encodeURIComponent(attempt)}`);await loadAttempt()}catch(error){message.textContent=friendly(error);button.disabled=false;button.textContent='Xác nhận và vào phòng thi →';delete form.dataset.pending}};
 }
 async function boot(){try{
- const u=new URL(location.href),launch=u.searchParams.get('launch'),cleanPath=u.pathname.replace(/\/+$/,'')||'/';
+ const u=new URL(location.href),launch=u.searchParams.get('launch'),cleanPath=(u.pathname.replace(/\/{2,}/g,'/').replace(/\/+$/,'')||'/').toLowerCase();
  if(/^\/admin(?:\/|$)/.test(u.pathname)){
   const {bootAdmin}=await import('./admin.js?build=20261030-routes-v2');
   return await bootAdmin(app);
@@ -532,7 +509,6 @@ async function boot(){try{
  if(cleanPath==='/tra-cuu-ket-qua')return pageTraCuu();
  if(cleanPath==='/phuc-khao')return pagePhucKhao();
  if(cleanPath==='/ho-tro')return pageHoTro();
- if(cleanPath==='/bao-loi')return pageBaoLoi();
  if(cleanPath==='/su-co-khan-cap')return pageSuCoKhanCap();
  if(cleanPath==='/to-cao-gian-lan')return pageToCaoGianLan();
  let inviteUrl='';if(u.pathname.startsWith('/join/'))inviteUrl=decodeURIComponent(u.pathname.split('/')[2]||'');else inviteUrl=u.searchParams.get('invite')||'';

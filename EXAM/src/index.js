@@ -13,7 +13,7 @@ import {
   EMAIL_EVENT_ALIASES,
   renderEmailTemplate
 } from './email-templates.js';
-import { ensureAdditiveSchema, getRepository, sharedCache } from './repository.js';
+import { ensureAdditiveSchema, getRepository, sharedCache, upsertCompatibleUser } from './repository.js';
 import {
   dispatchBusinessEmail,
   dispatchEventEmail,
@@ -29,6 +29,7 @@ import {
   adminBootstrap,
   authorizeAdmin,
   bad,
+  ensureSystemOwnerAccount,
   logoutAdmin,
   nowIso,
   ok,
@@ -99,7 +100,7 @@ import {
   getPublicAssessmentInfo,
   health,
   listPublicCatalog,
-   recordViolation,
+  recordViolation,
   redeemLaunch,
   requestCandidateVerification,
   reviewAttempt,
@@ -131,6 +132,7 @@ import {
 } from './exam-service.js';
 import {
   PUBLIC_ROUTE_DEFINITIONS,
+  normalizeRoutePathname,
   renderAdminRouteHtml,
   renderNotFoundHtml,
   renderPublicRouteHtml
@@ -141,7 +143,6 @@ export const PUBLIC_SERVICE_PATHS = Object.freeze([
   '/tra-cuu-ket-qua',
   '/phuc-khao',
   '/ho-tro',
-  '/bao-loi',
   '/su-co-khan-cap',
   '/to-cao-gian-lan'
 ]);
@@ -236,7 +237,7 @@ async function routeApi(request, env) {
 
   // 3. Admin Subsystem Endpoints (/api/admin/*)
   if (path === '/api/admin/auth/bootstrap' && method === 'POST') return adminBootstrap(env, request);
-  if (path === '/api/admin/auth/request-otp' && method === 'POST') return requestAdminOtp(env, request);
+  if ((path === '/api/admin/auth/request-otp' || path === '/api/admin/auth/login') && method === 'POST') return requestAdminOtp(env, request);
   if (path === '/api/admin/auth/verify-otp' && method === 'POST') return verifyAdminOtp(env, request);
   if (path === '/api/admin/auth/logout' && method === 'POST') return logoutAdmin(env, request);
   if (path === '/api/admin/auth/me' && method === 'GET') {
@@ -388,7 +389,7 @@ export default {
 
       const isGetOrHead = ['GET', 'HEAD'].includes(request.method.toUpperCase());
       const isStaticAsset = /\.(?:js|mjs|css|webp|png|jpg|jpeg|svg|ico|json|txt|map|woff2?)$/i.test(u.pathname);
-      const cleanPath = u.pathname.replace(/\/+$/, '') || '/';
+      const cleanPath = normalizeRoutePathname(u.pathname);
 
       // 1. Direct /admin route serving on both exam.skyfirst.io.vn and www.exam.skyfirst.io.vn
       if (isGetOrHead && !isStaticAsset && /^\/admin(?:\/|\.html|$)/.test(u.pathname)) {
@@ -402,7 +403,7 @@ export default {
         }), request);
       }
 
-      // 2. Direct SSR HTML serving for all 7 public routes (/, /tra-cuu-ket-qua, /phuc-khao, /ho-tro, /bao-loi, /su-co-khan-cap, /to-cao-gian-lan)
+      // 2. Direct SSR HTML serving for all 6 active public routes (/, /tra-cuu-ket-qua, /phuc-khao, /ho-tro, /su-co-khan-cap, /to-cao-gian-lan)
       if (isGetOrHead && !isStaticAsset && Object.prototype.hasOwnProperty.call(PUBLIC_ROUTE_DEFINITIONS, cleanPath)) {
         const html = renderPublicRouteHtml(cleanPath, u.origin);
         return withSecurity(new Response(request.method.toUpperCase() === 'HEAD' ? null : html, {
@@ -426,15 +427,15 @@ export default {
         }), request);
       }
 
-      // 4. Static assets via ASSETS binding (never serve removed /tra-cuu route)
-      if (cleanPath !== '/tra-cuu' && env?.ASSETS?.fetch) {
+      // 4. Static assets via ASSETS binding (never serve removed /tra-cuu or /bao-loi routes)
+      if (cleanPath !== '/tra-cuu' && cleanPath !== '/bao-loi' && env?.ASSETS?.fetch) {
         const assetRes = await env.ASSETS.fetch(request);
         if (assetRes.status !== 404) {
           return withSecurity(assetRes, request);
         }
       }
 
-      // 5. Unknown routes return explicit 404 page (never fallback to homepage!)
+      // 5. Unknown or removed routes (/tra-cuu, /bao-loi, etc.) return explicit 404 page (never fallback to homepage!)
       const notFoundHtml = renderNotFoundHtml(u.pathname);
       return withSecurity(new Response(request.method.toUpperCase() === 'HEAD' ? null : notFoundHtml, {
         status: 404,
@@ -481,6 +482,7 @@ export {
   buildAttemptQuestionSnapshot,
   cleanEvents,
   drawQuestionsFromMatrix,
+  ensureSystemOwnerAccount,
   evidenceFileAllowed,
   generateVariantCode,
   getRepository,
@@ -491,5 +493,6 @@ export {
   renderEmailTemplate,
   sanitizeAnswers,
   sharedCache,
+  upsertCompatibleUser,
   verifyCandidateIdentityWithAdapter
 };
