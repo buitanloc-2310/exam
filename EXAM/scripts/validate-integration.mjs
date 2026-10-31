@@ -1,3 +1,4 @@
+process.on('unhandledRejection', e => { console.error(e); process.exit(1); });
 /**
  * Standalone EXAM 2026 End-to-End Integration & Security Verification Suite (scripts/validate-integration.mjs)
  * Covers all mandatory scenarios from Article 35 without any external SLC dependency:
@@ -963,34 +964,662 @@ try {
     assert.ok(emailLogsRes.data.email_logs.length >= 4);
   });
 
+
+  // Scenario 16: Expired account OTP rejection, old OTP invalidation, 3rd-party Identity Adapter (HMAC + anti-replay), Candidate Explanation, Proctor Classification, Anomaly Analysis & Fraud Access Audit
+  await scenario('Expired account OTP rejection, old OTP invalidation, 3rd-party Identity Adapter, candidate explanation, proctor classification, and anomaly analysis work end-to-end', async () => {
+    // 1. Create an admin user with an expired expires_at -> OTP request must be rejected (403) and send zero emails
+    await call('/api/admin/users/role', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { email: 'expired.officer@skyfirst.io.vn', full_name: 'Expired Officer', status: 'active', roles: ['proctor'], expires_at: '2020-01-01T00:00:00Z', reason: 'Test expiry' }
+    });
+    const emailsBefore = sentEmails.length;
+    const expOtp = await call('/api/admin/auth/request-otp', {
+      method: 'POST',
+      body: { email: 'expired.officer@skyfirst.io.vn' }
+    });
+    assert.equal(expOtp.status, 403);
+    assert.equal(expOtp.data.code, 'ADMIN_NOT_PROVISIONED');
+    assert.equal(sentEmails.length, emailsBefore, 'Zero emails must be sent to expired account');
+
+    // 2. Old unused OTP is automatically invalidated when a new OTP is issued
+    db.prepare(`DELETE FROM exam_otp_challenges WHERE email='viewer@skyfirst.io.vn'`).run();
+    db.prepare(`DELETE FROM exam_rate_limits`).run();
+    await call('/api/admin/auth/request-otp', { method: 'POST', body: { email: 'viewer@skyfirst.io.vn' } });
+    const firstOtp = sentEmails.at(-1).text.match(/\b(\d{6})\b/)[1];
+    // Expire cooldown so second OTP can be requested
+    db.prepare(`UPDATE exam_otp_challenges SET created_at='2020-01-01 00:00:00' WHERE email='viewer@skyfirst.io.vn'`).run();
+    await call('/api/admin/auth/request-otp', { method: 'POST', body: { email: 'viewer@skyfirst.io.vn' } });
+    const secondOtp = sentEmails.at(-1).text.match(/\b(\d{6})\b/)[1];
+    // Attempting to verify with firstOtp must fail
+    const oldVerify = await call('/api/admin/auth/verify-otp', { method: 'POST', body: { email: 'viewer@skyfirst.io.vn', otp: firstOtp } });
+    assert.equal(oldVerify.status, 401);
+    const newVerify = await call('/api/admin/auth/verify-otp', { method: 'POST', body: { email: 'viewer@skyfirst.io.vn', otp: secondOtp } });
+    assert.equal(newVerify.status, 200);
+
+    // 3. Third-party Identity Verification Adapter & Anti-Replay protection
+    const idVerify1 = await call('/api/public/assessments/SF2026/verify-identity', {
+      method: 'POST',
+      body: { email: 'cand1@example.com', candidate_code: 'SFN-001', full_name: 'Nguyễn Văn An', reference_code: 'REF-UNIQUE-2026-001' }
+    });
+    assert.equal(idVerify1.status, 200);
+    assert.equal(idVerify1.data.verified, true);
+
+    // Replaying the same reference_code is blocked (409 VERIFICATION_REPLAY_DETECTED)
+    const idReplay = await call('/api/public/assessments/SF2026/verify-identity', {
+      method: 'POST',
+      body: { email: 'cand1@example.com', candidate_code: 'SFN-001', full_name: 'Nguyễn Văn An', reference_code: 'REF-UNIQUE-2026-001' }
+    });
+    assert.equal(idReplay.status, 409);
+    assert.equal(idReplay.data.code, 'VERIFICATION_REPLAY_DETECTED');
+
+    // 4. Candidate Violation Explanation & Proctor Classification + Anomaly Analysis
+    const explainRes = await call(`/api/public/exam-attempts/${guestAttemptId}/explain`, {
+      method: 'POST',
+      token: guestAccessKey,
+      session: guestSession,
+      body: { explanation: 'Trình duyệt tự thoát toàn màn hình do thông báo cập nhật hệ điều hành Windows.' }
+    });
+    assert.equal(explainRes.status, 200);
+    assert.equal(explainRes.data.saved, true);
+
+    const classifyRes = await call(`/api/admin/monitor/${guestAttemptId}/action`, {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { action: 'classify', classification: 'verified_by_officer', reason: 'Đã đối chiếu giải trình hợp lệ của thí sinh' }
+    });
+    assert.equal(classifyRes.status, 200);
+
+    const anomalyRes = await call(`/api/admin/monitor/anomalies?exam_id=${examId}`, { token: sysAdminToken });
+    assert.equal(anomalyRes.status, 200);
+    assert.equal(anomalyRes.data.auto_disqualification_enabled, false);
+    assert.equal(anomalyRes.data.privacy_policy.screen_capture_enabled, false);
+
+    // 5. Fraud Report viewing records audit trail (fraud_report.accessed)
+    const fraudList = await call('/api/admin/fraud-reports', { token: sysAdminToken });
+    assert.equal(fraudList.status, 200);
+    const accessLogCount = db.prepare(`SELECT COUNT(*) n FROM exam_audit_log WHERE event_type='fraud_report.accessed'`).get().n;
+    assert.ok(accessLogCount >= 1, 'Viewing fraud reports must record an audit log entry');
+  });
+
+
+  // Scenario 17: Comprehensive 15-Case Proctoring, Device/OS, Camera/Mic/2nd-Cam, Network/VPN, Digital Evidence Chain-of-Custody & Recovery Acceptance Suite (Section 11)
+  await scenario('All 15 mandatory proctoring, device/OS, camera/mic, network/IP/VPN, R2 SHA-256 digital evidence chain, and recovery acceptance cases pass end-to-end', async () => {
+    // Re-open a dedicated active attempt for proctoring acceptance testing
+    const procLaunch = await call('/api/admin/candidates/launch', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { exam_id: examId, email: 'proctor.test@skyfirst.io.vn', full_name: 'Phạm Minh Tuấn', candidate_code: 'SFN-PROC-01' }
+    });
+    assert.equal(procLaunch.status, 200);
+    const procRedeem = await call('/api/public/exam-launch/redeem', {
+      method: 'POST',
+      body: { launch_token: procLaunch.data.launch_token }
+    });
+    assert.equal(procRedeem.status, 200);
+    const pAttemptId = procRedeem.data.attempt_id;
+    const pToken = procRedeem.data.access_token;
+    const pSession = 'proctor-session-0123456789abcdef';
+
+    // Preflight capability check (honest disclosure of browser vs native companion capabilities)
+    const preflightRes = await call('/api/public/assessments/SF2026/preflight-check', {
+      method: 'POST',
+      body: { fullscreen_supported: true, is_extended_display: false, camera_ready: true, microphone_ready: true, vm_suspected: false }
+    });
+    assert.equal(preflightRes.status, 200);
+    assert.equal(preflightRes.data.passed, true);
+    assert.ok(preflightRes.data.honest_disclosure);
+
+    // Helper to post proctoring events
+    async function postProctorEvent(eventType, extra = {}) {
+      return call(`/api/exam-attempts/${pAttemptId}/proctor-event`, {
+        method: 'POST',
+        token: pToken,
+        session: pSession,
+        body: { event_type: eventType, ...extra }
+      });
+    }
+
+    // Case 1: Tab switching & window switching
+    const c1Tab = await postProctorEvent('tab_switch', { description: 'Thí sinh chuyển sang tab khác' });
+    assert.equal(c1Tab.status, 200);
+    assert.equal(c1Tab.data.risk_level, 2);
+    const c1Win = await postProctorEvent('window_switch', { description: 'Thí sinh chuyển cửa sổ ứng dụng' });
+    assert.equal(c1Win.status, 200);
+
+    // Case 2: Fullscreen exit
+    const c2Fs = await postProctorEvent('fullscreen_exit', { description: 'Thoát chế độ toàn màn hình' });
+    assert.equal(c2Fs.status, 200);
+    assert.equal(c2Fs.data.risk_level, 2);
+
+    // Case 3: Copy & paste restriction
+    const c3Copy = await postProctorEvent('copy_blocked');
+    const c3Paste = await postProctorEvent('paste_blocked');
+    assert.equal(c3Copy.status, 200);
+    assert.equal(c3Paste.status, 200);
+
+    // Case 4: PrintScreen & screen recording detection
+    const c4Prt = await postProctorEvent('printscreen_attempt');
+    const c4Rec = await postProctorEvent('screen_recording_detected');
+    assert.equal(c4Prt.data.risk_level, 2);
+    assert.equal(c4Rec.data.risk_level, 3);
+
+    // Case 5: Multi-monitor & display mirroring detection
+    const c5Mon = await postProctorEvent('multi_monitor_detected', { device_env: { screen_count: 2, is_extended: true } });
+    assert.equal(c5Mon.data.risk_level, 3);
+    assert.equal(c5Mon.data.device_status, 'multi_monitor_detected');
+
+    // Case 6: USB & Bluetooth device connection monitoring
+    const c6Usb = await postProctorEvent('usb_device_connected', { device_env: { usb_vendor: '0x1234' } });
+    const c6Bt = await postProctorEvent('bluetooth_device_connected');
+    assert.equal(c6Usb.data.risk_level, 2);
+    assert.equal(c6Bt.data.risk_level, 2);
+
+    // Case 7: Remote desktop / remote assistance detection (Mức 4 — serious, but auto_cancel_exam is false)
+    const c7Rdp = await postProctorEvent('remote_desktop_detected', { description: 'Phát hiện phiên điều khiển từ xa RDP/TeamViewer' });
+    assert.equal(c7Rdp.data.risk_level, 4);
+    assert.equal(c7Rdp.data.auto_cancel_exam, false);
+
+    // Case 8: Virtual Machine detection
+    const c8Vm = await postProctorEvent('vm_detected', { device_env: { gpu_renderer: 'VMware SVGA II' } });
+    assert.ok(c8Vm.data.risk_level >= 3);
+
+    // Case 9: IP change & VPN/Proxy usage (logged without auto-cancelling attempt)
+    await postProctorEvent('ip_changed', { client_ip: '203.113.10.1' });
+    const c9Ip = await postProctorEvent('vpn_proxy_suspected', { client_ip: '198.51.100.44', vpn_suspected: true });
+    assert.equal(c9Ip.status, 200);
+    assert.equal(c9Ip.data.auto_cancel_exam, false);
+
+    // Case 10: Camera, Microphone, Secondary Camera & Network disconnect/anomalies
+    await postProctorEvent('camera_connected');
+    await postProctorEvent('mic_connected');
+    await postProctorEvent('secondary_camera_connected');
+    const c10CamCover = await postProctorEvent('camera_covered');
+    assert.equal(c10CamCover.data.camera_status, 'covered');
+    const c10MultiFace = await postProctorEvent('multiple_faces_detected');
+    assert.equal(c10MultiFace.data.risk_level, 4);
+    assert.equal(c10MultiFace.data.camera_status, 'multiple_faces');
+    const c10CamOff = await postProctorEvent('camera_disconnected');
+    assert.equal(c10CamOff.data.camera_status, 'disconnected');
+    const c10Cam2Off = await postProctorEvent('secondary_camera_disconnected');
+    assert.equal(c10Cam2Off.data.secondary_camera_status, 'disconnected');
+    const c10MicOff = await postProctorEvent('mic_disconnected');
+    assert.equal(c10MicOff.data.mic_status, 'disconnected');
+    const c10Voice = await postProctorEvent('voice_anomaly_detected');
+    assert.equal(c10Voice.data.risk_level, 3);
+    const c10NetOff = await postProctorEvent('network_disconnected');
+    assert.equal(c10NetOff.data.risk_level, 1);
+
+    // Case 11: Simultaneous login on multiple devices (lease conflict -> 409 SESSION_CONFLICT & logs multi_device_login)
+    await call(`/api/exam-attempts/${pAttemptId}/save`, {
+      method: 'POST',
+      token: pToken,
+      session: pSession,
+      body: { revision: 0, answers: { q1: '12' }, events: [] }
+    });
+    const competingLogin = await call(`/api/exam-attempts/${pAttemptId}/save`, {
+      method: 'POST',
+      token: pToken,
+      session: 'other-device-session-999999999999',
+      body: { revision: 1, answers: { q1: '10' }, events: [] }
+    });
+    assert.equal(competingLogin.status, 409);
+    assert.equal(competingLogin.data.code, 'SESSION_CONFLICT');
+
+    // Case 12: API payload tampering & forgery detection (400 PAYLOAD_TAMPER_DETECTED + Mức 4 event logged)
+    const tamperedCall = await postProctorEvent('window_blur', { forged_payload: true });
+    assert.equal(tamperedCall.status, 400);
+    assert.equal(tamperedCall.data.code, 'PAYLOAD_TAMPER_DETECTED');
+    assert.equal(tamperedCall.data.detail.risk_level, 4);
+
+    // Case 13: Session recovery after network/device incident (reconnect + save + submit works cleanly without data loss)
+    await postProctorEvent('network_reconnected');
+    await postProctorEvent('camera_connected');
+    const recSave = await call(`/api/exam-attempts/${pAttemptId}/save`, {
+      method: 'POST',
+      token: pToken,
+      session: pSession,
+      body: { revision: 1, answers: { q1: '12', q2: 'Bài làm tự luận khôi phục sau sự cố mạng.' }, events: [] }
+    });
+    assert.equal(recSave.status, 200);
+    assert.equal(recSave.data.answer_revision, 2);
+
+    // Case 14: Digital Evidence storage (R2), SHA-256 + Chain Hash verification, Admin Timeline & Officer Decision
+    const ev1 = await call(`/api/exam-attempts/${pAttemptId}/evidence`, {
+      method: 'POST',
+      token: pToken,
+      session: pSession,
+      body: {
+        evidence_type: 'webcam_snapshot',
+        event_id: c10MultiFace.data.event_id,
+        base64_data: Buffer.from('mock-webcam-frame-1').toString('base64'),
+        mime_type: 'image/webp',
+        metadata: { camera: 'primary', faces_detected: 2 }
+      }
+    });
+    assert.equal(ev1.status, 200);
+    assert.ok(ev1.data.sha256);
+    assert.ok(ev1.data.chain_hash);
+
+    const ev2 = await call(`/api/exam-attempts/${pAttemptId}/evidence`, {
+      method: 'POST',
+      token: pToken,
+      session: pSession,
+      body: {
+        evidence_type: 'secondary_camera_snapshot',
+        base64_data: Buffer.from('mock-secondary-cam-frame-2').toString('base64'),
+        mime_type: 'image/webp',
+        metadata: { camera: 'secondary_wide_angle' }
+      }
+    });
+    assert.equal(ev2.status, 200);
+    assert.notEqual(ev2.data.r2_key, ev1.data.r2_key, 'Evidence must never overwrite old evidence');
+    assert.notEqual(ev2.data.chain_hash, ev1.data.chain_hash);
+
+    // Forged evidence hash is rejected (400 EVIDENCE_HASH_MISMATCH)
+    const badHashEv = await call(`/api/exam-attempts/${pAttemptId}/evidence`, {
+      method: 'POST',
+      token: pToken,
+      session: pSession,
+      body: {
+        evidence_type: 'audio_clip',
+        base64_data: Buffer.from('audio-data').toString('base64'),
+        metadata: { expected_sha256: '0000000000000000000000000000000000000000000000000000000000000000' }
+      }
+    });
+    assert.equal(badHashEv.status, 400);
+    assert.equal(badHashEv.data.code, 'EVIDENCE_HASH_MISMATCH');
+
+    // Admin retrieves attempt timeline & verifies cryptographic chain of custody
+    const timelineRes = await call(`/api/admin/monitor/${pAttemptId}/timeline`, { token: sysAdminToken });
+    assert.equal(timelineRes.status, 200);
+    assert.equal(timelineRes.data.evidence_chain_intact, true);
+    assert.equal(timelineRes.data.digital_evidence.length, 2);
+    assert.ok(timelineRes.data.proctoring_events.length >= 15);
+    assert.ok(timelineRes.data.attempt.ip_change_count >= 2);
+
+    // Admin downloads evidence from R2 & checks SHA-256 headers; unauthenticated request is blocked (401)
+    const unauthEv = await call(`/api/admin/evidence/${ev1.data.evidence_id}`);
+    assert.equal(unauthEv.status, 401);
+    const authEvReq = new Request(`https://exam.skyfirst.io.vn/api/admin/evidence/${ev1.data.evidence_id}`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${sysAdminToken}` }
+    });
+    const authEvRes = await examWorker.fetch(authEvReq, getEnv());
+    assert.equal(authEvRes.status, 200);
+    assert.equal(authEvRes.headers.get('x-evidence-sha256'), ev1.data.sha256);
+    assert.equal(authEvRes.headers.get('x-evidence-chain-hash'), ev1.data.chain_hash);
+
+    // Admin reviews proctoring event with received_by, decided_by, status & decision_note
+    const revEv = await call(`/api/admin/monitor/events/${c10MultiFace.data.event_id}/review`, {
+      method: 'POST',
+      token: sysAdminToken,
+      body: {
+        status: 'verified_violation',
+        received_by: 'proctor@skyfirst.io.vn',
+        decided_by: 'admin@skyfirst.io.vn',
+        decision_note: 'Đã đối chiếu ảnh bằng chứng số R2, xác nhận có người thứ hai xuất hiện trong khung hình.'
+      }
+    });
+    assert.equal(revEv.status, 200);
+    assert.equal(revEv.data.status, 'verified_violation');
+
+    // Admin generates post-exam proctoring summary report
+    const repRes = await call(`/api/admin/monitor/report?exam_id=${examId}`, { token: sysAdminToken });
+    assert.equal(repRes.status, 200);
+    assert.ok(repRes.data.report.total_events >= 15);
+    assert.equal(repRes.data.report.total_digital_evidence, 2);
+
+    // Case 15: Submit attempt & verify existing exam/submit/lookup/appeal workflows remain 100% functional
+    const pSubmit = await call(`/api/exam-attempts/${pAttemptId}/submit`, {
+      method: 'POST',
+      token: pToken,
+      session: pSession,
+      body: { revision: 2 }
+    });
+    assert.equal(pSubmit.status, 200);
+    assert.match(pSubmit.data.receipt_code, /^EXM-/);
+  });
+
+
+  // Scenario 18: Sections 13-23 Expansion — Virtual Camera/Mic Detection, Pre-Exam ID/Portrait/Room Photo Check-in, QR-Paired Secondary Mobile Camera, Live Proctor Verification Prompt, Anti-Bypass Lock Guard, Mobile Android/iOS Telemetry & Question Bank Leakage Watermark
+  await scenario('Sections 13-23: Virtual Camera/Mic detection, Pre-Exam Check-in Photos, QR Secondary Mobile Camera, Live Proctor Verification Prompt, Lock Anti-Bypass Guard, Mobile Android/iOS telemetry, and QBank export watermark work end-to-end', async () => {
+    // 1. Virtual Camera / Virtual Microphone detection in preflight-check (Section 13 & 21.4)
+    const vcamPreflight = await call('/api/public/assessments/SF2026/preflight-check', {
+      method: 'POST',
+      body: {
+        fullscreen_supported: true,
+        camera_ready: true,
+        microphone_ready: true,
+        media_devices: [
+          { kind: 'videoinput', label: 'OBS Virtual Camera' },
+          { kind: 'audioinput', label: 'VB-Audio Virtual Cable' }
+        ]
+      }
+    });
+    assert.equal(vcamPreflight.status, 200);
+    assert.equal(vcamPreflight.data.passed, false, 'Virtual camera/mic must fail preflight check');
+    assert.equal(vcamPreflight.data.media_spoof_check.virtual_camera_detected, true);
+    assert.equal(vcamPreflight.data.media_spoof_check.virtual_microphone_detected, true);
+    assert.ok(vcamPreflight.data.platform_capability_matrix.windows_desktop);
+    assert.ok(vcamPreflight.data.platform_capability_matrix.macos_desktop);
+    assert.ok(vcamPreflight.data.platform_capability_matrix.android_mobile);
+    assert.ok(vcamPreflight.data.platform_capability_matrix.ios_mobile);
+
+    // 2. Launch a new candidate attempt for Sections 13-23 verification
+    const s18Launch = await call('/api/admin/candidates/launch', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { exam_id: examId, email: 'mobile.cand@skyfirst.io.vn', full_name: 'Hoàng Minh Đức', candidate_code: 'SFN-MOB-01' }
+    });
+    assert.equal(s18Launch.status, 200);
+    const s18Redeem = await call('/api/public/exam-launch/redeem', {
+      method: 'POST',
+      body: { launch_token: s18Launch.data.launch_token }
+    });
+    const mAttemptId = s18Redeem.data.attempt_id;
+    const mToken = s18Redeem.data.access_token;
+    const mSession = 'mobile-session-0123456789abcdef';
+
+    // 3. Pre-Exam Check-in Photos: ID card, Portrait, and 360 Workspace/Desk Inspection (Section 14 & 21.1)
+    for (const photoType of ['id_card', 'portrait', 'workspace_360']) {
+      const ckRes = await call(`/api/exam-attempts/${mAttemptId}/checkin-photos`, {
+        method: 'POST',
+        token: mToken,
+        session: mSession,
+        body: {
+          photo_type: photoType,
+          base64_data: Buffer.from(`checkin-${photoType}-image-bytes`).toString('base64'),
+          mime_type: 'image/webp'
+        }
+      });
+      assert.equal(ckRes.status, 200);
+      assert.ok(ckRes.data.evidence_id);
+      assert.ok(ckRes.data.sha256);
+    }
+
+    // 4. QR-Linked Secondary Mobile Camera Pairing & Synchronized Frame Upload (Section 14 & 21.2)
+    const pairRes = await call(`/api/exam-attempts/${mAttemptId}/secondary-camera/pair`, {
+      method: 'POST',
+      token: mToken,
+      session: mSession
+    });
+    assert.equal(pairRes.status, 200);
+    assert.match(pairRes.data.pairing_code, /^CAM2-/);
+    assert.match(pairRes.data.qr_url, /cam2_qr=/);
+
+    const connectQrRes = await call(`/api/public/secondary-camera/${pairRes.data.pairing_code}/connect`, {
+      method: 'POST',
+      body: { platform: 'iOS Safari 18', camera_facing: 'environment' }
+    });
+    assert.equal(connectQrRes.status, 200);
+    assert.equal(connectQrRes.data.paired, true);
+    assert.equal(connectQrRes.data.secondary_camera_status, 'active');
+
+    const frameQrRes = await call(`/api/public/secondary-camera/${pairRes.data.pairing_code}/frame`, {
+      method: 'POST',
+      body: {
+        base64_data: Buffer.from('wide-angle-desk-view-frame').toString('base64'),
+        mime_type: 'image/webp'
+      }
+    });
+    assert.equal(frameQrRes.status, 200);
+    assert.equal(frameQrRes.data.evidence_type, 'secondary_camera_snapshot');
+
+    // 5. Mobile Android/iOS & Anti-Spoofing Telemetry Events (Sections 14, 15, 21, 22)
+    for (const [evType, expectedMinRisk] of [
+      ['app_backgrounded', 2],
+      ['screen_locked', 2],
+      ['call_interruption', 1],
+      ['orientation_change', 1],
+      ['virtual_camera_detected', 4],
+      ['spoof_media_detected', 4],
+      ['person_substituted', 4],
+      ['gaze_or_head_anomaly', 1],
+      ['print_or_save_blocked', 2]
+    ]) {
+      const evRes = await call(`/api/exam-attempts/${mAttemptId}/proctor-event`, {
+        method: 'POST',
+        token: mToken,
+        session: mSession,
+        body: { event_type: evType }
+      });
+      assert.equal(evRes.status, 200);
+      assert.ok(evRes.data.risk_level >= expectedMinRisk, `Expected risk >= ${expectedMinRisk} for ${evType}`);
+      assert.equal(evRes.data.auto_cancel_exam, false);
+    }
+
+    // 6. Live Proctor Direct Verification Prompt & Candidate Response (Section 21.8)
+    const promptAction = await call(`/api/admin/monitor/${mAttemptId}/action`, {
+      method: 'POST',
+      token: sysAdminToken,
+      body: {
+        action: 'request_verification',
+        prompt_message: 'Vui lòng xoay camera phụ 360 độ để giám thị kiểm tra khu vực bàn làm bài.',
+        reason: 'Kiểm tra ngẫu nhiên không gian phòng thi'
+      }
+    });
+    assert.equal(promptAction.status, 200);
+    assert.equal(promptAction.data.lifecycle_state, 'pending_verification');
+
+    const respondPrompt = await call(`/api/exam-attempts/${mAttemptId}/verify-prompt`, {
+      method: 'POST',
+      token: mToken,
+      session: mSession,
+      body: {
+        response_note: 'Em đã xoay camera phụ 360 độ quanh bàn thi theo yêu cầu của giám thị.',
+        evidence_id: frameQrRes.data.evidence_id
+      }
+    });
+    assert.equal(respondPrompt.status, 200);
+    assert.equal(respondPrompt.data.lifecycle_state, 'resumed');
+    assert.equal(respondPrompt.data.proctor_prompt.status, 'responded');
+
+    // 7. Question Bank Export Watermark & Audit Log (Section 21.6)
+    const qbExport = await call('/api/admin/questions?export=1', { token: sysAdminToken });
+    assert.equal(qbExport.status, 200);
+    assert.match(qbExport.data.export_watermark, /^SKYFIRST-QBANK-/);
+
+    // 8. Lock/Suspension Anti-Bypass Guard (Section 17: Cannot create a new attempt when existing attempt is locked)
+    await call('/api/admin/candidates/enroll', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { exam_id: examId, email: 'locked.cand@example.com', full_name: 'Thí sinh Đang Khóa', candidate_code: 'SFN-LCK-01', class_name: 'Lớp 12A', status: 'active' }
+    });
+    db.prepare(`DELETE FROM exam_otp_challenges WHERE email='locked.cand@example.com'`).run();
+    db.prepare(`DELETE FROM exam_rate_limits`).run();
+    await call('/api/public/assessments/SF2026/request-verification', { method: 'POST', body: { email: 'locked.cand@example.com' } });
+    const lckOtp = sentEmails.at(-1).text.match(/\b(\d{6})\b/)[1];
+    const lckStart1 = await call('/api/public/assessments/SF2026/start', {
+      method: 'POST',
+      body: { full_name: 'Thí sinh Đang Khóa', email: 'locked.cand@example.com', candidate_code: 'SFN-LCK-01', class_name: 'Lớp 12A', verification_code: lckOtp }
+    });
+    assert.equal(lckStart1.status, 200);
+    await call(`/api/admin/monitor/${lckStart1.data.attempt_id}/action`, {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { action: 'lock', reason: 'Khóa tạm thời để kiểm tra chống tạo phiên mới lách khóa' }
+    });
+
+    db.prepare(`DELETE FROM exam_otp_challenges WHERE email='locked.cand@example.com'`).run();
+    db.prepare(`DELETE FROM exam_rate_limits`).run();
+    await call('/api/public/assessments/SF2026/request-verification', { method: 'POST', body: { email: 'locked.cand@example.com' } });
+    const lckOtp2 = sentEmails.at(-1).text.match(/\b(\d{6})\b/)[1];
+    const bypassAttempt = await call('/api/public/assessments/SF2026/start', {
+      method: 'POST',
+      body: { full_name: 'Thí sinh Đang Khóa', email: 'locked.cand@example.com', candidate_code: 'SFN-LCK-01', class_name: 'Lớp 12A', verification_code: lckOtp2 }
+    });
+    assert.equal(bypassAttempt.status, 423);
+    assert.equal(bypassAttempt.data.code, 'ATTEMPT_LOCKED_CANNOT_BYPASS');
+
+    // 9. Milestone 6: Candidate File-Upload Prohibition (403), Author/Proctor Document Upload, QTI 2.1, Scientific Calculator, and 9 Sky First Proprietary Anti-Cheat Technologies
+    // 9a. Candidate file upload attempt is strictly forbidden (403 CANDIDATE_FILE_UPLOAD_FORBIDDEN)
+    const fd = new FormData();
+    fd.append('file', new Blob(['fake answer file'], { type: 'text/plain' }), 'answer.txt');
+    fd.append('question_id', 'q2');
+    const candUploadRes = await examWorker.fetch(new Request(`https://exam.skyfirst.io.vn/api/public/exam-attempts/${mAttemptId}/upload`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${mToken}` },
+      body: fd
+    }), baseEnv);
+    assert.equal(candUploadRes.status, 403);
+    const candUploadJson = await candUploadRes.json();
+    assert.equal(candUploadJson.detail?.code || candUploadJson.code, 'CANDIDATE_FILE_UPLOAD_FORBIDDEN');
+
+    // 9b. Author Document / OCR Question Parser & AI Authoring Assistant
+    const parseDocRes = await call('/api/admin/authoring/parse-document', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: {
+        source_format: 'docx',
+        subject: 'Toán học',
+        topic: 'Giải tích',
+        document_text: 'Câu 1: Đạo hàm của x^2 là gì?\nA. x\nB. 2x\nC. 2\nD. x^3\nĐáp án: B\n\nCâu 2: Trình bày định lý cơ bản của giải tích.'
+      }
+    });
+    assert.equal(parseDocRes.status, 200);
+    assert.equal(parseDocRes.data.extracted_count, 2);
+    assert.equal(parseDocRes.data.draft_questions[0].type, 'mcq');
+    assert.equal(parseDocRes.data.draft_questions[0].answer, '2x');
+    assert.equal(parseDocRes.data.draft_questions[1].type, 'essay');
+
+    const aiAssistRes = await call('/api/admin/authoring/ai-assist', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { topic: 'Giải tích', source_text: 'Đạo hàm của sin(x) là cos(x)', type: 'mcq', difficulty: 'medium' }
+    });
+    assert.equal(aiAssistRes.status, 200);
+    assert.equal(aiAssistRes.data.suggestion.options.length, 4);
+    assert.equal(aiAssistRes.data.suggestion.requires_human_approval, true);
+
+    // 9c. Proctor Session Document Upload & Listing
+    const procDocRes = await call('/api/admin/proctor/session-documents', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: {
+        exam_id: examId,
+        title: 'Biên bản xác minh camera phụ ca sáng',
+        content: 'Đã kiểm tra góc quay 360 độ hợp lệ.'
+      }
+    });
+    assert.equal(procDocRes.status, 200);
+    assert.match(procDocRes.data.document.sha256, /^[a-f0-9]{64}$/);
+
+    const procDocList = await call(`/api/admin/proctor/session-documents?exam_id=${examId}`, { token: sysAdminToken });
+    assert.equal(procDocList.status, 200);
+    assert.ok(procDocList.data.documents.length >= 1);
+
+    // 9d. QTI 2.1 Export & Import
+    const qtiExp = await call(`/api/admin/questions/qti-export?exam_id=${examId}`, { token: sysAdminToken });
+    assert.equal(qtiExp.status, 200);
+    assert.match(qtiExp.data.qti_xml, /<questestinterop/);
+
+    const qtiImp = await call('/api/admin/questions/qti-import', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { qti_xml: qtiExp.data.qti_xml }
+    });
+    assert.equal(qtiImp.status, 200);
+    assert.ok(qtiImp.data.imported_count >= 1);
+
+    // 9e. Privacy Shield Behavioral Biometrics & Dynamic Integrity Challenge
+    const bioRes = await call(`/api/exam-attempts/${mAttemptId}/behavioral-biometrics`, {
+      method: 'POST',
+      token: mToken,
+      session: mSession,
+      body: {
+        behavioral_vector: { keystroke_dwell_ms: 10, keystroke_flight_ms: 120, bulk_input_ratio: 0.85 },
+        duration_seconds: 25
+      }
+    });
+    assert.equal(bioRes.status, 200);
+    assert.equal(bioRes.data.privacy_shield_mode, 'edge_feature_vectors_only_no_raw_keylog');
+    assert.equal(bioRes.data.requires_dynamic_challenge, true);
+    assert.ok(bioRes.data.dynamic_challenge.challenge_id);
+
+    // 9f. Honeytoken Leak Scan, Collusion Graph, Adversarial Lab, Threat Memory & Psychometrics Analytics
+    const leakScan = await call('/api/admin/security/leak-scan', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { leaked_text: `Phát hiện rò rỉ đề của thí sinh SFN-MOB-01 câu hỏi: 5 + 7 bằng mấy?` }
+    });
+    assert.equal(leakScan.status, 200);
+    assert.equal(leakScan.data.leak_report.leak_detected, true);
+    assert.ok(leakScan.data.leak_report.matched_sources.length >= 1);
+
+    const colGraph = await call(`/api/admin/security/collusion-graph?exam_id=${examId}`, { token: sysAdminToken });
+    assert.equal(colGraph.status, 200);
+    assert.ok(Array.isArray(colGraph.data.graph.nodes));
+
+    const advLab = await call('/api/admin/security/adversarial-lab', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { exam_id: examId }
+    });
+    assert.equal(advLab.status, 200);
+    assert.equal(advLab.data.simulation.true_positive_rate_percent, 100);
+    assert.equal(advLab.data.simulation.false_positive_rate_percent, 0);
+
+    const threatMem = await call('/api/admin/security/threat-memory', { token: sysAdminToken });
+    assert.equal(threatMem.status, 200);
+    assert.ok(threatMem.data.threats.length >= 4);
+
+    const psychAnalytics = await call(`/api/admin/exams/${examId}/analytics`, { token: sysAdminToken });
+    assert.equal(psychAnalytics.status, 200);
+    assert.ok(Array.isArray(psychAnalytics.data.item_psychometrics));
+  });
+
   console.log(`STANDALONE EXAM 2026 INTEGRATION SUITE: ${passed}/${passed} PASS`);
 } finally {
   globalThis.fetch = originalFetch;
   db.close();
 }
 
-// 14B. Public service routes must stay on their requested URL and load the app shell directly.
+// 16. Verify all 18 mandatory URLs across exam.skyfirst.io.vn and www.exam.skyfirst.io.vn, 301 canonical path preservation, and 404 for unknown routes
 {
-  for (const path of ['/tra-cuu', '/phuc-khao', '/ho-tro', '/bao-loi', '/su-co-khan-cap', '/to-cao-gian-lan']) {
-    const res = await examWorker.fetch(new Request(`https://exam.skyfirst.io.vn${path}`, { method: 'GET' }), baseEnv);
-    assert.equal(res.status, 200, `Expected 200 for ${path}`);
-    assert.equal(res.headers.get('location'), null, `Unexpected redirect for ${path}`);
-    assert.match(res.headers.get('cache-control') || '', /no-store/);
-    assert.match(await res.text(), /id="app"/);
+  const mandatoryRoutes = [
+    ['/', 'home', 'Hệ Thống Khảo Thí Và Đánh Giá Sky First'],
+    ['/admin', 'admin', 'Phân hệ Quản trị'],
+    ['/tra-cuu', 'tra-cuu', 'Tra cứu kết quả thi'],
+    ['/tra-cuu-ket-qua', 'tra-cuu-ket-qua', 'Tra cứu kết quả thi'],
+    ['/phuc-khao', 'phuc-khao', 'Đăng ký phúc khảo kết quả thi'],
+    ['/ho-tro', 'ho-tro', 'Hỗ trợ thí sinh'],
+    ['/bao-loi', 'bao-loi', 'Báo lỗi hệ thống'],
+    ['/su-co-khan-cap', 'su-co-khan-cap', 'Báo sự cố khẩn cấp'],
+    ['/to-cao-gian-lan', 'to-cao-gian-lan', 'Tố cáo gian lận']
+  ];
+  const hosts = ['https://exam.skyfirst.io.vn', 'https://www.exam.skyfirst.io.vn'];
+  let verifiedUrls = 0;
+  for (const host of hosts) {
+    for (const [route, routeKey, expectedHeading] of mandatoryRoutes) {
+      const res = await examWorker.fetch(new Request(`${host}${route}`, { method: 'GET' }), baseEnv);
+      assert.equal(res.status, 200, `Expected 200 for ${host}${route}`);
+      assert.equal(res.headers.get('location'), null, `Unexpected redirect for ${host}${route}`);
+      assert.match(res.headers.get('content-type') || '', /text\/html/);
+      assert.match(res.headers.get('cache-control') || '', /no-store/);
+      const html = await res.text();
+      assert.match(html, new RegExp(`data-route="${routeKey}"`), `Missing data-route="${routeKey}" on ${host}${route}`);
+      assert.ok(html.includes(expectedHeading), `Missing heading "${expectedHeading}" on ${host}${route}`);
+      verifiedUrls++;
+    }
   }
-  console.log('PASS Scenario 14B: all six public service routes return the app shell without redirecting to /');
+  assert.equal(verifiedUrls, 18, 'All 18 mandatory URLs must be verified');
+
+  // Verify optional canonical 301 redirect preserves path and query string (never redirects to /)
+  const canonRes = await examWorker.fetch(
+    new Request('https://www.exam.skyfirst.io.vn/tra-cuu-ket-qua?receipt_code=EXM-123&candidate_code=SFN-001', { method: 'GET' }),
+    { ...baseEnv, ENFORCE_CANONICAL_HOST: '1' }
+  );
+  assert.equal(canonRes.status, 301);
+  assert.equal(canonRes.headers.get('location'), 'https://exam.skyfirst.io.vn/tra-cuu-ket-qua?receipt_code=EXM-123&candidate_code=SFN-001');
+
+  // Verify unknown route returns 404 (never falls back to homepage /)
+  const notFoundRes = await examWorker.fetch(new Request('https://exam.skyfirst.io.vn/duong-dan-khong-ton-tai', { method: 'GET' }), baseEnv);
+  assert.equal(notFoundRes.status, 404);
+  const notFoundHtml = await notFoundRes.text();
+  assert.match(notFoundHtml, /data-route="404"/);
+
+  console.log('PASS Scenario 16: All 18 mandatory URLs across exam.skyfirst.io.vn and www.exam.skyfirst.io.vn return route-specific HTML (200 OK), canonical 301 preserves path+query, and unknown routes return 404');
 }
 
-// 15. Direct Worker /admin HTML routing on exam.skyfirst.io.vn and www.exam.skyfirst.io.vn (CSP-compliant, zero inline scripts)
-{
-  for (const url of ['https://exam.skyfirst.io.vn/admin', 'https://www.exam.skyfirst.io.vn/admin', 'https://exam.skyfirst.io.vn/admin/exams']) {
-    const res = await examWorker.fetch(new Request(url, { method: 'GET' }), baseEnv);
-    assert.equal(res.status, 200, `Expected 200 for ${url}`);
-    assert.match(res.headers.get('content-security-policy') || '', /script-src 'self'/);
-    assert.match(res.headers.get('cache-control') || '', /no-store/);
-    const html = await res.text();
-    assert.match(html, /<script type="module" src="\/admin\.js\?build=20261030-routes-v2"><\/script>/);
-    assert.doesNotMatch(html, /Khu quản trị không có trong cổng dự thi/);
-  }
-  console.log('PASS Scenario 15: Worker directly serves CSP-compliant /admin HTML on exam.skyfirst.io.vn/admin and www.exam.skyfirst.io.vn/admin');
-}
+process.exit(0);

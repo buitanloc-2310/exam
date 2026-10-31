@@ -1,7 +1,57 @@
 <!doctype html>
-<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Xác minh địa chỉ email</title></head>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="x-skyfirst-template" content="email-verification.html">
+  <title>Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First · Xác Minh Danh Tính Thí Sinh Trước Khi Vào Thi</title>
+</head>
 <body style="margin:0;padding:0;background:#f3f6fa;font-family:Arial,Helvetica,sans-serif;color:#18324b">
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f6fa;padding:28px 10px"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #dbe4ee;border-radius:12px;overflow:hidden">
-<tr><td style="padding:24px 28px;background:#0d2a4a;color:#fff"><div style="font-size:12px;line-height:1.6">Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</div><div style="font-size:20px;font-weight:700;line-height:1.4;margin-top:6px">Hệ Thống Khảo Thí Và Đánh Giá Sky First</div></td></tr>
-<tr><td style="padding:28px"><p style="font-size:14px;line-height:1.7">Kính gửi {{recipient_name}},</p><h1 style="font-size:22px;line-height:1.4;color:#12385b">Xác minh địa chỉ email</h1><p style="font-size:15px;line-height:1.8">Thông báo này liên quan đến nghiệp vụ của bạn trong Hệ Thống Khảo Thí Và Đánh Giá Sky First. Vui lòng đọc nội dung và hướng dẫn tiếp theo được gửi trong thông báo này.</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f8fc;border:1px solid #e1e9f2"><tr><td style="padding:16px 18px;font-size:14px;line-height:1.9"><div><strong>Kỳ thi:</strong> {{exam_title}}</div><div><strong>Mã thí sinh:</strong> {{candidate_code}}</div><div><strong>Mã yêu cầu / biên nhận:</strong> {{request_code}}</div><div><strong>Trạng thái:</strong> {{status}}</div><div><strong>Thời điểm:</strong> {{event_time}}</div></td></tr></table><div style="font-size:14px;line-height:1.8;margin-top:18px;white-space:pre-line">{{message}}</div><p style="font-size:14px;line-height:1.8">Nếu cần hỗ trợ, vui lòng truy cập <a href="https://exam.skyfirst.io.vn/ho-tro" style="color:#0866c6">Hệ Thống Khảo Thí Và Đánh Giá Sky First</a>.</p></td></tr>
-<tr><td style="padding:18px 28px;border-top:1px solid #e4ebf3;color:#52677b;font-size:12px;line-height:1.7"><strong>Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</strong><br>Đây là thư được gửi tự động. Hộp thư này không tiếp nhận thư trả lời.<br>noreply@skyfirst.io.vn</td></tr></table></td></tr></table></body></html>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f6fa;padding:26px 10px">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid #dbe4ee;border-radius:12px;overflow:hidden">
+          <tr>
+            <td style="padding:22px 28px;background:#0f3d68;color:#ffffff">
+              <div style="font-size:11px;letter-spacing:0.8px;text-transform:uppercase;opacity:0.92">MẠNG LƯỚI GIÁO DỤC VÀ PHÁT TRIỂN CỘNG ĐỒNG SKY FIRST</div>
+              <div style="font-size:13px;line-height:1.5;margin-top:2px">Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First</div>
+              <div style="font-size:19px;font-weight:700;line-height:1.35;margin-top:6px">HỆ THỐNG KHẢO THÍ VÀ ĐÁNH GIÁ SKY FIRST</div>
+              <div style="font-size:12px;opacity:0.9;margin-top:2px">Hệ Thống Khảo Thí Và Đánh Giá Sky First · Mã mẫu: email-verification.html</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:26px 28px">
+              <div style="display:inline-block;padding:4px 10px;background:#eef2f6;color:#1e3a5f;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:0.5px;margin-bottom:12px">XÁC MINH DỰ THI · NOREPLY</div>
+              <p style="font-size:14px;line-height:1.7;margin:0 0 10px">Kính gửi <strong>{{recipient_name}}</strong>,</p>
+              <h1 style="font-size:21px;line-height:1.35;color:#12385b;margin:0 0 12px">Xác Minh Danh Tính Thí Sinh Trước Khi Vào Thi</h1>
+              <p style="font-size:14px;line-height:1.75;color:#2c445e;margin:0 0 16px">Sử dụng mã OTP 6 chữ số dưới đây để hoàn tất bước xác minh danh tính trước khi bắt đầu phiên làm bài thi trực tuyến.</p>
+              <div style="background:#eef7ff;border:2px solid #1d4ed8;border-radius:10px;padding:18px;text-align:center;margin:18px 0">
+      <div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#1e3a8a">Mã OTP xác minh dự thi</div>
+      <div style="font-size:32px;letter-spacing:8px;font-weight:700;color:#0d2a4a;margin:10px 0">{{otp_code}}</div>
+      <div style="font-size:13px;color:#1e40af">Hiệu lực trong <strong>{{expires_minutes}} phút</strong> · Chỉ áp dụng cho đúng email đã đăng ký</div>
+    </div>
+    <p style="font-size:13px;line-height:1.6;color:#475569">Lưu ý: Không chia sẻ mã xác minh cho người khác. Nếu bạn không thực hiện thao tác vào phòng thi, vui lòng bỏ qua thư này.</p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin:16px 0">
+                <tr><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#475569;width:42%;font-size:13px"><strong>Kỳ thi:</strong></td><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:13px">{{exam_title}}</td></tr><tr><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#475569;width:42%;font-size:13px"><strong>Mã thí sinh:</strong></td><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:13px">{{candidate_code}}</td></tr><tr><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#475569;width:42%;font-size:13px"><strong>Trạng thái hồ sơ:</strong></td><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:13px">{{status}}</td></tr><tr><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#475569;width:42%;font-size:13px"><strong>Thời điểm yêu cầu:</strong></td><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:13px">{{event_time}}</td></tr>
+              </table>
+              <div style="font-size:14px;line-height:1.75;margin-top:16px;padding:14px 16px;background:#f9fbfd;border:1px solid #e5edf5;border-radius:8px;white-space:pre-line;color:#1e293b">{{message}}</div>
+              <p style="font-size:13px;line-height:1.7;margin-top:18px;color:#475569">
+                Cổng thông tin chính thức: <a href="https://exam.skyfirst.io.vn/" style="color:#0866c6">https://exam.skyfirst.io.vn</a> |
+                Tra cứu kết quả: <a href="https://exam.skyfirst.io.vn/tra-cuu-ket-qua" style="color:#0866c6">/tra-cuu-ket-qua</a> |
+                Hỗ trợ: <a href="https://exam.skyfirst.io.vn/ho-tro" style="color:#0866c6">/ho-tro</a>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 28px;background:#f8fafc;border-top:1px solid #e4ebf3;color:#52677b;font-size:12px;line-height:1.65">
+              <strong>Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First — Hệ Thống Khảo Thí Và Đánh Giá Sky First</strong><br>
+              Đây là email tự động từ hệ thống (noreply@skyfirst.io.vn). Vui lòng không trả lời trực tiếp thư này.<br>
+              Địa chỉ gửi định danh: <strong>noreply@skyfirst.io.vn</strong>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -29,6 +29,10 @@ export class DatabaseSync {
     fs.writeFileSync(
       this._scriptPath,
       `import os, sys, sqlite3, json
+try:
+    os.closerange(3, 256)
+except Exception:
+    pass
 
 req_pipe = sys.argv[1]
 res_pipe = sys.argv[2]
@@ -90,8 +94,11 @@ while True:
     );
 
     this._proc = spawn('python3', ['-u', this._scriptPath, this._reqPipe, this._resPipe, filename], {
-      stdio: 'ignore'
+      stdio: 'ignore',
+      detached: true
     });
+    this._proc.unref();
+    process.on('exit', () => { try { this._proc.kill('SIGKILL'); } catch {} try { fs.rmSync(this._dir, { recursive: true, force: true }); } catch {} });
 
     while (!fs.existsSync(this._resPipe)) {}
     const readyRaw = fs.readFileSync(this._resPipe, 'utf8');
