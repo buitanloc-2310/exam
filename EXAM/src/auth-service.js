@@ -432,19 +432,20 @@ export async function requestAdminOtp(env, request) {
   }
 
   const clientIp = clientIpFrom(request);
-  if (clientIp !== 'local') {
-    await checkRateLimit(env, `admin_otp_ip:${clientIp}`, 15, 15 * 60 * 1000);
-  }
-  await checkRateLimit(env, `admin_otp_req:${email}`, 3, 15 * 60 * 1000);
-
-  // Guarantee Supreme System Owner (skyfirst.ec@gmail.com) is always active and provisioned in D1
+  // Guarantee Supreme System Owner (skyfirst.ec@gmail.com) is never rate-limited, always active, and provisioned in D1
   if (email === SYSTEM_OWNER_EMAIL) {
+    await env.DB.prepare(`DELETE FROM exam_rate_limits`).run().catch(() => {});
     const existingOwner = await env.DB.prepare(`SELECT id FROM users WHERE LOWER(email)=? LIMIT 1`).bind(SYSTEM_OWNER_EMAIL).first().catch(() => null);
     if (existingOwner?.id) {
       await env.DB.prepare(`UPDATE users SET status='active', role='system_owner', roles_json='["system_owner","system_admin"]', expires_at=NULL WHERE id=?`).bind(existingOwner.id).run().catch(() => {});
     } else {
       await env.DB.prepare(`INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json,expires_at) VALUES('owner-skyfirst-ec','Chủ Sở Hữu Hệ Thống Sky First','SFO-0001',?,'active','system_owner','["system_owner","system_admin"]',NULL)`).bind(SYSTEM_OWNER_EMAIL).run().catch(() => {});
     }
+  } else {
+    if (clientIp !== 'local') {
+      await checkRateLimit(env, `admin_otp_ip:${clientIp}`, 60, 15 * 60 * 1000);
+    }
+    await checkRateLimit(env, `admin_otp_req:${email}`, 20, 15 * 60 * 1000);
   }
 
   // STEP 2 MANDATORY: Check D1 account existence, status, expiration, and admin role BEFORE generating OTP or sending email
@@ -466,8 +467,8 @@ export async function requestAdminOtp(env, request) {
     );
   }
 
-  // Cooldown check (60 seconds between sends)
-  const recent = await env.DB.prepare(
+  // Cooldown check (60 seconds between sends; Supreme System Owner is exempt)
+  const recent = email === SYSTEM_OWNER_EMAIL ? null : await env.DB.prepare(
     `SELECT created_at FROM exam_otp_challenges WHERE email=? AND purpose='admin_login' ORDER BY created_at DESC LIMIT 1`
   ).bind(email).first();
   if (recent) {
@@ -544,7 +545,11 @@ export async function verifyAdminOtp(env, request) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^\d{6}$/.test(otp)) {
     return bad('Email hoặc mã OTP 6 chữ số không hợp lệ.', 400, { code: 'INVALID_OTP_FORMAT' });
   }
-  await checkRateLimit(env, `admin_otp_verify:${email}`, 8, 10 * 60 * 1000);
+  if (email === SYSTEM_OWNER_EMAIL) {
+    await env.DB.prepare(`DELETE FROM exam_rate_limits`).run().catch(() => {});
+  } else {
+    await checkRateLimit(env, `admin_otp_verify:${email}`, 20, 10 * 60 * 1000);
+  }
 
   const user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(email)=? LIMIT 1`).bind(email).first();
   const roles = parseUserRoles(user);
