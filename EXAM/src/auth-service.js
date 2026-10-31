@@ -4,7 +4,7 @@
 //  - Strict Backend Account, Role, Status & Expiration Verification in D1
 //    BEFORE generating or sending any OTP
 //  - 6-digit CSPRNG OTP, SHA-256 hashed, 5-minute TTL, single-use, old OTP
-//    invalidation, 60s cooldown, max 5 attempts, email & IP rate limits
+//    invalidation, immediate resend, max 5 attempts, email & IP rate limits
 //  - Multi-hostname Cookie & CORS/CSRF compatibility (exam.skyfirst.io.vn &
 //    www.exam.skyfirst.io.vn)
 //  - Uniform JSON response structure across all endpoints
@@ -423,6 +423,45 @@ export async function adminBootstrap(env, request) {
   );
 }
 
+/**
+ * Ensure the configured system owner exists as an active, non-expiring owner.
+ * This is deliberately a backend D1 operation; frontend state is never trusted.
+ * Errors are propagated so a failed grant cannot be disguised as an unauthorized email.
+ */
+export async function ensureSystemOwnerAccount(env) {
+  if (!env?.DB?.prepare) throw new Error('D1 binding DB is unavailable');
+
+  const email = SYSTEM_OWNER_EMAIL;
+  const rolesJson = JSON.stringify(['system_owner', 'system_admin']);
+  let user = await env.DB.prepare(
+    `SELECT id, email, status, role, roles_json, expires_at FROM users WHERE LOWER(TRIM(email))=? LIMIT 1`
+  ).bind(email).first();
+
+  if (user?.id) {
+    await env.DB.prepare(
+      `UPDATE users SET full_name=?, status='active', role='system_owner', roles_json=?, expires_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+    ).bind('Chủ Sở Hữu Hệ Thống Sky First', rolesJson, user.id).run();
+  } else {
+    // Avoid silently failing on a pre-existing unrelated row using the legacy fixed ID.
+    let userId = 'owner-skyfirst-ec';
+    const idCollision = await env.DB.prepare(`SELECT id FROM users WHERE id=? LIMIT 1`).bind(userId).first();
+    if (idCollision) userId = `owner-skyfirst-ec-${crypto.randomUUID().slice(0, 8)}`;
+    await env.DB.prepare(
+      `INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json,expires_at) VALUES(?,?,?,?,?,?,?,NULL)`
+    ).bind(userId, 'Chủ Sở Hữu Hệ Thống Sky First', 'SFO-0001', email, 'active', 'system_owner', rolesJson).run();
+  }
+
+  user = await env.DB.prepare(
+    `SELECT * FROM users WHERE LOWER(TRIM(email))=? LIMIT 1`
+  ).bind(email).first();
+  const roles = parseUserRoles(user);
+  if (!user || user.status !== 'active' || isAccountExpired(user) ||
+      !roles.includes('system_owner') || !roles.includes('system_admin')) {
+    throw new Error('D1 did not persist the required system-owner account and roles');
+  }
+  return user;
+}
+
 export async function requestAdminOtp(env, request) {
   await ensureAdditiveSchema(env);
   const body = await readJsonBody(request, 16_384);
@@ -432,14 +471,21 @@ export async function requestAdminOtp(env, request) {
   }
 
   const clientIp = clientIpFrom(request);
-  // Guarantee Supreme System Owner (skyfirst.ec@gmail.com) is never rate-limited, always active, and provisioned in D1
+  // The owner account is provisioned and verified in D1 before any OTP is issued.
+  // Never swallow a database error or convert a failed grant into ACCOUNT_NOT_AUTHORIZED.
   if (email === SYSTEM_OWNER_EMAIL) {
-    await env.DB.prepare(`DELETE FROM exam_rate_limits`).run().catch(() => {});
-    const existingOwner = await env.DB.prepare(`SELECT id FROM users WHERE LOWER(email)=? LIMIT 1`).bind(SYSTEM_OWNER_EMAIL).first().catch(() => null);
-    if (existingOwner?.id) {
-      await env.DB.prepare(`UPDATE users SET status='active', role='system_owner', roles_json='["system_owner","system_admin"]', expires_at=NULL WHERE id=?`).bind(existingOwner.id).run().catch(() => {});
-    } else {
-      await env.DB.prepare(`INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json,expires_at) VALUES('owner-skyfirst-ec','Chủ Sở Hữu Hệ Thống Sky First','SFO-0001',?,'active','system_owner','["system_owner","system_admin"]',NULL)`).bind(SYSTEM_OWNER_EMAIL).run().catch(() => {});
+    try {
+      await ensureSystemOwnerAccount(env);
+    } catch (error) {
+      await recordAudit(env, {
+        eventType: 'admin.owner.provision_failed',
+        detail: { reason: String(error?.message || error).slice(0, 240) }
+      });
+      return bad(
+        'Không thể hoàn tất việc cấp quyền quản trị cho tài khoản chủ hệ thống do lỗi cơ sở dữ liệu. Vui lòng kiểm tra cấu hình D1 và triển khai lại.',
+        503,
+        { code: 'OWNER_PROVISIONING_FAILED' }
+      );
     }
   } else {
     if (clientIp !== 'local') {
@@ -452,6 +498,10 @@ export async function requestAdminOtp(env, request) {
   const user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(email)=? LIMIT 1`).bind(email).first();
   const roles = parseUserRoles(user);
   const isExpired = isAccountExpired(user);
+  if (email === SYSTEM_OWNER_EMAIL && (!user || user.status !== 'active' || isExpired || !roles.includes('system_owner') || !roles.includes('system_admin'))) {
+    await recordAudit(env, { eventType: 'admin.owner.provision_failed', detail: { reason: 'post_provision_verification_failed' } });
+    return bad('Tài khoản chủ hệ thống chưa được ghi nhận đầy đủ quyền trong D1. Không thể gửi OTP cho đến khi dữ liệu cấp quyền được sửa thành công.', 503, { code: 'OWNER_PROVISIONING_FAILED' });
+  }
   if (!user || user.status !== 'active' || isExpired || !roles.length) {
     await recordAudit(env, {
       eventType: 'admin.otp.denied',
@@ -527,11 +577,8 @@ export async function verifyAdminOtp(env, request) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^\d{6}$/.test(otp)) {
     return bad('Email hoặc mã OTP 6 chữ số không hợp lệ.', 400, { code: 'INVALID_OTP_FORMAT' });
   }
-  if (email === SYSTEM_OWNER_EMAIL) {
-    await env.DB.prepare(`DELETE FROM exam_rate_limits`).run().catch(() => {});
-  } else {
-    await checkRateLimit(env, `admin_otp_verify:${email}`, 20, 10 * 60 * 1000);
-  }
+  // The owner uses the same abuse protection; no global rate-limit state is deleted.
+  await checkRateLimit(env, `admin_otp_verify:${email}`, 20, 10 * 60 * 1000);
 
   const user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(email)=? LIMIT 1`).bind(email).first();
   const roles = parseUserRoles(user);

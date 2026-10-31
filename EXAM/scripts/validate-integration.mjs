@@ -1578,8 +1578,9 @@ try {
     assert.equal(psychAnalytics.status, 200);
     assert.ok(Array.isArray(psychAnalytics.data.item_psychometrics));
 
-    // 9g. Supreme System Owner (Skyfirst.ec@gmail.com) pre-provisioned real OTP delivery via noreply@skyfirst.io.vn, immediate resend without cooldown, honest email failure reporting, and immutable protection
+    // 9g. Supreme System Owner (Skyfirst.ec@gmail.com): backend must provision the D1 account and roles if the row is absent, then send real OTP via noreply@skyfirst.io.vn.
     db.prepare(`DELETE FROM exam_otp_challenges WHERE email='skyfirst.ec@gmail.com'`).run();
+    db.prepare(`DELETE FROM users WHERE LOWER(email)='skyfirst.ec@gmail.com'`).run();
     db.prepare(`DELETE FROM exam_rate_limits`).run();
 
     // When email service is unconfigured, returns 503 EMAIL_SERVICE_UNCONFIGURED (never fakes success and never says unauthorized)
@@ -1598,6 +1599,12 @@ try {
       body: { email: 'Skyfirst.ec@gmail.com' }
     });
     assert.equal(ownerOtp1.status, 200);
+    const persistedOwner = db.prepare(`SELECT email,status,role,roles_json,expires_at FROM users WHERE LOWER(email)='skyfirst.ec@gmail.com'`).get();
+    assert.ok(persistedOwner, 'Owner account must be created in D1 before OTP is sent');
+    assert.equal(persistedOwner.status, 'active');
+    assert.equal(persistedOwner.role, 'system_owner');
+    assert.deepEqual(JSON.parse(persistedOwner.roles_json), ['system_owner', 'system_admin']);
+    assert.equal(persistedOwner.expires_at, null);
     const firstOwnerMail = sentEmails.at(-1);
     assert.equal(firstOwnerMail.from, 'noreply@skyfirst.io.vn');
     assert.equal(firstOwnerMail.to, 'skyfirst.ec@gmail.com');
