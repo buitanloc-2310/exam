@@ -291,3 +291,8 @@ CREATE TABLE IF NOT EXISTS exam_secondary_camera_links (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_sec_cam_links_attempt ON exam_secondary_camera_links(attempt_id, status);
+
+-- Seed Immutable Supreme System Owner (Chủ sở hữu hệ thống tối cao: skyfirst.ec@gmail.com)
+INSERT OR IGNORE INTO users (id, full_name, sfn_id, email, status)
+VALUES ('owner-skyfirst-ec', 'Chủ Sở Hữu Hệ Thống Sky First', 'SFO-0001', 'skyfirst.ec@gmail.com', 'active');
+UPDATE users SET status='active' WHERE LOWER(email)='skyfirst.ec@gmail.com';

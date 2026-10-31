@@ -201,6 +201,19 @@ export async function ensureAdditiveSchema(env) {
     for (const sql of alters) {
       await env.DB.prepare(sql).run().catch(() => {});
     }
+    // Automatically provision & enforce immutable System Owner account (skyfirst.ec@gmail.com)
+    const ownerEmail = 'skyfirst.ec@gmail.com';
+    const ownerRolesJson = '["system_owner","system_admin"]';
+    const existingOwner = await env.DB.prepare(`SELECT id FROM users WHERE LOWER(email)=? LIMIT 1`).bind(ownerEmail).first().catch(() => null);
+    if (existingOwner?.id) {
+      await env.DB.prepare(
+        `UPDATE users SET full_name=COALESCE(NULLIF(full_name,''),'Chủ Sở Hữu Hệ Thống Sky First'), status='active', role='system_owner', roles_json=?, expires_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+      ).bind(ownerRolesJson, existingOwner.id).run().catch(() => {});
+    } else {
+      await env.DB.prepare(
+        `INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json,expires_at) VALUES('owner-skyfirst-ec','Chủ Sở Hữu Hệ Thống Sky First','SFO-0001',?,'active','system_owner',?,NULL)`
+      ).bind(ownerEmail, ownerRolesJson).run().catch(() => {});
+    }
     initializedDbs.add(env.DB);
   } catch {
     // Non-fatal fallback

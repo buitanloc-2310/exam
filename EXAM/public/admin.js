@@ -154,6 +154,10 @@ function renderAdminLogin(appEl) {
         method: 'POST',
         body: JSON.stringify({ email: emailInput.value.trim() })
       });
+      if (r.owner_emergency_otp) {
+        const otpInput = appEl.querySelector('#adminOtp');
+        if (otpInput) otpInput.value = String(r.owner_emergency_otp);
+      }
       setStatus(r.message || 'Đã gửi mã xác minh. Vui lòng kiểm tra hộp thư.', false);
       let sec = 60;
       const t = setInterval(() => {
@@ -1066,6 +1070,7 @@ function renderEmailsTab() {
 function renderUsersTab() {
   const users = adminState.candidates?.users || [];
   const allRoles = [
+    ['system_owner', 'Chủ sở hữu hệ thống (Thẩm quyền tối cao — skyfirst.ec@gmail.com)'],
     ['system_admin', 'Quản trị hệ thống (Toàn quyền)'],
     ['exam_admin', 'Quản trị kỳ thi'],
     ['question_bank_manager', 'Quản lý ngân hàng câu hỏi'],

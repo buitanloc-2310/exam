@@ -17,6 +17,8 @@ import {
   verifyCandidateIdentityWithAdapter
 } from './adapters.js';
 import {
+  SYSTEM_OWNER_EMAIL,
+  SYSTEM_OWNER_ROLE,
   ADMIN_ROLES,
   ROLE_PERMISSIONS,
   authorizeAdmin,
@@ -1947,6 +1949,12 @@ async function adminManageUserRole(env, request) {
   const roles = Array.isArray(body.roles) ? body.roles.filter(r => ADMIN_ROLES.includes(r) || r === 'candidate') : ['candidate'];
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return bad('Email không hợp lệ.', 400);
+  if (email === SYSTEM_OWNER_EMAIL) {
+    if (str(admin.email).toLowerCase() !== SYSTEM_OWNER_EMAIL || status !== 'active' || body.expires_at || !roles.includes('system_admin')) {
+      return bad('Tài khoản Chủ sở hữu hệ thống tối cao (skyfirst.ec@gmail.com) là bất khả xâm phạm, không thể bị khóa, thu hồi quyền hoặc hạ cấp bởi quản trị viên.', 403, { code: 'OWNER_ACCOUNT_PROTECTED' });
+    }
+    if (!roles.includes(SYSTEM_OWNER_ROLE)) roles.unshift(SYSTEM_OWNER_ROLE);
+  }
 
   let user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(email)=?`).bind(email).first();
   const userId = user?.id || `usr-${crypto.randomUUID().slice(0, 8)}`;

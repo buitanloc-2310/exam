@@ -22,6 +22,8 @@ import {
   verifyCandidateIdentityWithAdapter
 } from './adapters.js';
 import {
+  SYSTEM_OWNER_EMAIL,
+  SYSTEM_OWNER_ROLE,
   ADMIN_ROLES,
   ROLE_PERMISSIONS,
   adminBootstrap,
@@ -462,6 +464,8 @@ export default {
 };
 
 export {
+  SYSTEM_OWNER_EMAIL,
+  SYSTEM_OWNER_ROLE,
   ADMIN_ROLES,
   ROLE_PERMISSIONS,
   BRAND_UNIT_NAME,
