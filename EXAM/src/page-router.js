@@ -41,23 +41,12 @@ export const PUBLIC_ROUTE_DEFINITIONS = Object.freeze({
       <p class="lead">Nhập mã dự thi hoặc liên kết mời do đơn vị tổ chức cung cấp để bắt đầu xác minh danh tính và vào phòng thi, hoặc chọn dịch vụ khảo thí bên dưới.</p>
       <div class="service-grid" style="margin-top:16px">
         <a class="service-card" href="/tra-cuu-ket-qua"><div><b>Tra cứu kết quả thi</b><p>Thí sinh sử dụng thông tin dự thi đã được cấp để tra cứu kết quả và trạng thái công bố.</p></div><span>Truy cập /tra-cuu-ket-qua →</span></a>
-        <a class="service-card" href="/tra-cuu"><div><b>Tra cứu biên nhận &amp; hồ sơ (/tra-cuu)</b><p>Cổng tra cứu tương thích theo Mã biên nhận nộp bài và Mã thí sinh.</p></div><span>Truy cập /tra-cuu →</span></a>
         <a class="service-card" href="/phuc-khao"><div><b>Đăng ký phúc khảo</b><p>Gửi yêu cầu phúc khảo theo kỳ thi, bài thi và theo dõi tiến độ thẩm định.</p></div><span>Truy cập /phuc-khao →</span></a>
         <a class="service-card" href="/ho-tro"><div><b>Hỗ trợ thí sinh</b><p>Gửi câu hỏi hoặc yêu cầu hỗ trợ kỹ thuật, quy chế và tra cứu mã tiếp nhận.</p></div><span>Truy cập /ho-tro →</span></a>
         <a class="service-card" href="/bao-loi"><div><b>Báo lỗi hệ thống</b><p>Báo lỗi giao diện, đăng nhập, dự thi, tra cứu kèm hình ảnh/tệp đính kèm.</p></div><span>Truy cập /bao-loi →</span></a>
         <a class="service-card" href="/su-co-khan-cap"><div><b>Báo sự cố khẩn cấp</b><p>Báo các tình huống khẩn cấp ảnh hưởng trực tiếp đến phiên thi đang diễn ra.</p></div><span>Truy cập /su-co-khan-cap →</span></a>
         <a class="service-card" href="/to-cao-gian-lan"><div><b>Tố cáo gian lận</b><p>Gửi phản ánh bảo mật về hành vi gian lận hoặc vi phạm quy chế thi kèm minh chứng.</p></div><span>Truy cập /to-cao-gian-lan →</span></a>
       </div>`
-  },
-  '/tra-cuu': {
-    routeKey: 'tra-cuu',
-    title: `Tra cứu kết quả thi (/tra-cuu) — ${BRAND_UNIT_NAME} — ${BRAND_SYSTEM_NAME}`,
-    heading: 'Tra cứu kết quả thi',
-    subtitle: 'Thí sinh sử dụng thông tin dự thi đã được cấp để tra cứu kết quả và trạng thái công bố.',
-    description: 'Thí sinh sử dụng thông tin dự thi đã được cấp để tra cứu kết quả và trạng thái công bố trên Hệ Thống Khảo Thí Và Đánh Giá Sky First.',
-    ssrBody: `
-      <p class="lead">Thí sinh sử dụng thông tin dự thi đã được cấp để tra cứu kết quả và trạng thái công bố.</p>
-      <div class="notice">Chỉ hiển thị kết quả đã được công bố chính thức từ cơ sở dữ liệu khảo thí. Các trạng thái gồm: Chưa có kết quả, Đang chấm thi, Chờ phê duyệt, Đã công bố, hoặc Đã điều chỉnh sau phúc khảo.</div>`
   },
   '/tra-cuu-ket-qua': {
     routeKey: 'tra-cuu-ket-qua',
@@ -122,7 +111,7 @@ export function renderPublicRouteHtml(pathname, origin = 'https://exam.skyfirst.
   const canonicalUrl = `${origin}${cleanPath === '/' ? '/' : cleanPath}`;
 
   const navHtml = PUBLIC_NAV_ITEMS.map(([href, label]) => {
-    const isCurrent = href === cleanPath || (href === '/tra-cuu-ket-qua' && cleanPath === '/tra-cuu');
+    const isCurrent = href === cleanPath;
     return `<a class="nav-pill ${isCurrent ? 'active' : ''}" href="${href}">${label}</a>`;
   }).join('');
 
@@ -223,7 +212,8 @@ export function renderNotFoundHtml(pathname = '') {
 <body data-route="404">
   <main class="gate">
     <section class="gate-card">
-      <div class="ey">MẠNG LƯỚI GIÁO DỤC VÀ PHÁT TRIỂN CỘNG ĐỒNG SKY FIRST</div>
+      <div class="ey">${BRAND_UNIT_NAME}</div>
+      <div class="sys-sub">${BRAND_SYSTEM_NAME}</div>
       <h1>Không tìm thấy đường dẫn yêu cầu (404)</h1>
       <p class="lead">Đường dẫn bạn truy cập không tồn tại trên Hệ Thống Khảo Thí Và Đánh Giá Sky First.</p>
       <div class="actions">

@@ -235,11 +235,16 @@ await test('Project file inventory equals exactly 50 files (auto-pruning legacy 
   const redirects = fs.readFileSync('public/_redirects', 'utf8');
   const pageRouter = fs.readFileSync('src/page-router.js', 'utf8');
   const examJs = fs.readFileSync('public/exam.js', 'utf8');
-  for (const route of ['/tra-cuu', '/tra-cuu-ket-qua', '/phuc-khao', '/ho-tro', '/bao-loi', '/su-co-khan-cap', '/to-cao-gian-lan']) {
+  for (const route of ['/tra-cuu-ket-qua', '/phuc-khao', '/ho-tro', '/bao-loi', '/su-co-khan-cap', '/to-cao-gian-lan']) {
     assert.ok(pageRouter.includes(`'${route}'`), `Missing route definition for ${route} in src/page-router.js`);
     assert.ok(examJs.includes(`'${route}'`), `Missing route handler for ${route} in public/exam.js`);
     assert.ok(!redirects.split(/\r?\n/).some(line => line.trim().startsWith(route + ' ')), `${route} must not be redirected/proxied by _redirects`);
   }
+  assert.doesNotMatch(pageRouter, /['"\/]tra-cuu(?!-ket-qua)/, 'Legacy /tra-cuu route must be completely removed from src/page-router.js');
+  assert.doesNotMatch(examJs, /['"\/]tra-cuu(?!-ket-qua)/, 'Legacy /tra-cuu link/route must be completely removed from public/exam.js');
+  const adminJsTxt = fs.readFileSync('public/admin.js', 'utf8');
+  assert.doesNotMatch(adminJsTxt, /Gửi lại sau/, 'OTP countdown timer must be removed from public/admin.js');
+  assert.doesNotMatch(examJs, /Gửi lại sau/, 'OTP countdown timer must be removed from public/exam.js');
   const wranglerCfg = JSON.parse(fs.readFileSync('wrangler.json', 'utf8'));
   assert.equal(wranglerCfg.pages_build_output_dir, './public');
   assert.equal(wranglerCfg.d1_databases[0].binding, 'DB');

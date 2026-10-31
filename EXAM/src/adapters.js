@@ -179,8 +179,47 @@ export async function dispatchBusinessEmail(env, {
     return { delivered: false, status: 'failed', provider: 'custom_dispatcher', reason: lastErr?.message || 'Lỗi dịch vụ gửi email' };
   }
 
-  const apiUrl = str(env?.EMAIL_API_URL);
-  const apiKey = str(env?.EMAIL_API_KEY);
+  const cfEmailBinding = env?.SEND_EMAIL || env?.EMAIL || env?.NOREPLY_EMAIL;
+  if (typeof cfEmailBinding?.send === 'function') {
+    try {
+      const boundary = `sf-${logId.slice(0, 12)}`;
+      const rawMime = [
+        `From: "Hệ Thống Khảo Thí Và Đánh Giá Sky First" <${resolvedSender}>`,
+        `To: <${cleanTo}>`,
+        `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(str(subject))))}?=`,
+        `Message-ID: <${logId}@skyfirst.io.vn>`,
+        `Date: ${new Date().toUTCString()}`,
+        `MIME-Version: 1.0`,
+        `Content-Type: multipart/alternative; boundary="${boundary}"`,
+        ``,
+        `--${boundary}`,
+        `Content-Type: text/plain; charset=utf-8`,
+        ``,
+        String(text || ''),
+        `--${boundary}`,
+        `Content-Type: text/html; charset=utf-8`,
+        ``,
+        String(html || text || ''),
+        `--${boundary}--`
+      ].join('\r\n');
+      await cfEmailBinding.send({ from: resolvedSender, to: cleanTo, raw: rawMime });
+      await logEmailState(env, { ...baseLog, status: 'sent', provider: 'cloudflare_email', provider_message_id: logId, retry_count: 0 });
+      return { delivered: true, status: 'sent', provider: 'cloudflare_email', message_id: logId, from: resolvedSender };
+    } catch (err) {
+      await logEmailState(env, { ...baseLog, status: 'failed', provider: 'cloudflare_email', retry_count: 0, error_detail: err?.message || 'CF Email error' });
+      if (throwOnProviderError) throw httpError(`Không thể gửi email từ ${resolvedSender} qua Cloudflare Email Routing: ${err?.message || 'Lỗi dịch vụ'}`, 502, { code: 'EMAIL_PROVIDER_ERROR' });
+      return { delivered: false, status: 'failed', provider: 'cloudflare_email', reason: err?.message || 'Lỗi gửi email qua Cloudflare Email Routing' };
+    }
+  }
+
+  const apiKey = str(env?.EMAIL_API_KEY || env?.RESEND_API_KEY || env?.BREVO_API_KEY || env?.SENDGRID_API_KEY || env?.SMTP_API_KEY);
+  const apiUrl = str(
+    env?.EMAIL_API_URL ||
+    env?.SMTP_API_URL ||
+    (env?.RESEND_API_KEY || (apiKey && apiKey.startsWith('re_')) ? 'https://api.resend.com/emails' : '') ||
+    (env?.BREVO_API_KEY ? 'https://api.brevo.com/v3/smtp/email' : '') ||
+    (env?.SENDGRID_API_KEY ? 'https://api.sendgrid.com/v3/mail/send' : '')
+  );
   if (apiUrl && apiKey) {
     let lastErr = null;
     let lastStatus = 0;

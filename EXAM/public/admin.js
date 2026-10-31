@@ -154,23 +154,10 @@ function renderAdminLogin(appEl) {
         method: 'POST',
         body: JSON.stringify({ email: emailInput.value.trim() })
       });
-      if (r.owner_emergency_otp) {
-        const otpInput = appEl.querySelector('#adminOtp');
-        if (otpInput) otpInput.value = String(r.owner_emergency_otp);
-      }
-      setStatus(r.message || 'Đã gửi mã xác minh. Vui lòng kiểm tra hộp thư.', false);
-      let sec = 60;
-      const t = setInterval(() => {
-        if (!btn.isConnected) { clearInterval(t); return; }
-        btn.textContent = `Gửi lại sau ${--sec}s`;
-        if (sec <= 0) {
-          clearInterval(t);
-          btn.disabled = false;
-          btn.textContent = '1. Yêu cầu gửi mã xác minh';
-        }
-      }, 1000);
+      setStatus(r.message || 'Đã gửi mã xác minh 6 chữ số đến hộp thư của bạn.', false);
     } catch (err) {
       setStatus(err.message || 'Không thể gửi mã xác minh.', true);
+    } finally {
       btn.disabled = false;
       btn.textContent = '1. Yêu cầu gửi mã xác minh';
     }

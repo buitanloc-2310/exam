@@ -461,22 +461,13 @@ export async function requestAdminOtp(env, request) {
       }
     });
     return bad(
-      'Địa chỉ email chưa được cấp quyền hoặc tài khoản hiện không đủ điều kiện đăng nhập. Vui lòng kiểm tra lại hoặc liên hệ bộ phận quản trị hệ thống.',
+      'Vui lòng sử dụng địa chỉ email đã được cấp quyền để xác thực và đăng nhập.',
       403,
       { code: 'ADMIN_NOT_PROVISIONED', auth_code: 'ACCOUNT_NOT_AUTHORIZED' }
     );
   }
 
-  // Cooldown check (60 seconds between sends; Supreme System Owner is exempt)
-  const recent = email === SYSTEM_OWNER_EMAIL ? null : await env.DB.prepare(
-    `SELECT created_at FROM exam_otp_challenges WHERE email=? AND purpose='admin_login' ORDER BY created_at DESC LIMIT 1`
-  ).bind(email).first();
-  if (recent) {
-    const elapsed = Date.now() - databaseTimeMs(recent.created_at);
-    if (Number.isFinite(elapsed) && elapsed < 55_000) {
-      return bad('Vui lòng đợi 60 giây trước khi yêu cầu gửi lại OTP quản trị.', 429, { code: 'OTP_COOLDOWN' });
-    }
-  }
+  // No fixed cooldown timer: immediately invalidate previous unused OTPs and issue a fresh code
 
   // Invalidate any previous unused OTP challenges for this email
   await env.DB.prepare(
@@ -513,20 +504,11 @@ export async function requestAdminOtp(env, request) {
   });
 
   if (!mailResult.delivered) {
-    if (canonicalEmail === SYSTEM_OWNER_EMAIL) {
-      return ok({
-        sent: true,
-        owner_direct_mode: true,
-        owner_emergency_otp: otp,
-        expires_in_seconds: 300,
-        message: `Xác nhận Chủ sở hữu hệ thống tối cao (${SYSTEM_OWNER_EMAIL}). Mã xác minh trực tiếp của Chủ sở hữu là: ${otp}`
-      });
-    }
     return json({
       ok: false,
       code: 'EMAIL_SERVICE_UNCONFIGURED',
-      message: 'Dịch vụ gửi email OTP chưa được cấu hình trong môi trường hiện tại.',
-      detail: { code: 'EMAIL_SERVICE_UNCONFIGURED', reason: mailResult.reason }
+      message: mailResult.reason || 'Không thể gửi mã xác minh qua email: Dịch vụ gửi email (EMAIL_API_URL / EMAIL_API_KEY / RESEND_API_KEY) từ noreply@skyfirst.io.vn chưa được cấu hình hoặc gặp lỗi kết nối.',
+      detail: { code: 'EMAIL_SERVICE_UNCONFIGURED', sender: 'noreply@skyfirst.io.vn', recipient: canonicalEmail, reason: mailResult.reason }
     }, 503);
   }
 
@@ -555,7 +537,7 @@ export async function verifyAdminOtp(env, request) {
   const roles = parseUserRoles(user);
   if (!user || user.status !== 'active' || isAccountExpired(user) || !roles.length) {
     return bad(
-      'Địa chỉ email chưa được cấp quyền hoặc tài khoản hiện không đủ điều kiện đăng nhập. Vui lòng kiểm tra lại hoặc liên hệ bộ phận quản trị hệ thống.',
+      'Vui lòng sử dụng địa chỉ email đã được cấp quyền để xác thực và đăng nhập.',
       403,
       { code: 'ADMIN_NOT_PROVISIONED' }
     );

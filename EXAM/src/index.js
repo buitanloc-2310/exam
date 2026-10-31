@@ -138,7 +138,6 @@ import {
 
 export const PUBLIC_SERVICE_PATHS = Object.freeze([
   '/',
-  '/tra-cuu',
   '/tra-cuu-ket-qua',
   '/phuc-khao',
   '/ho-tro',
@@ -403,7 +402,7 @@ export default {
         }), request);
       }
 
-      // 2. Direct SSR HTML serving for all 8 public routes (/, /tra-cuu, /tra-cuu-ket-qua, /phuc-khao, /ho-tro, /bao-loi, /su-co-khan-cap, /to-cao-gian-lan)
+      // 2. Direct SSR HTML serving for all 7 public routes (/, /tra-cuu-ket-qua, /phuc-khao, /ho-tro, /bao-loi, /su-co-khan-cap, /to-cao-gian-lan)
       if (isGetOrHead && !isStaticAsset && Object.prototype.hasOwnProperty.call(PUBLIC_ROUTE_DEFINITIONS, cleanPath)) {
         const html = renderPublicRouteHtml(cleanPath, u.origin);
         return withSecurity(new Response(request.method.toUpperCase() === 'HEAD' ? null : html, {
@@ -427,8 +426,8 @@ export default {
         }), request);
       }
 
-      // 4. Static assets via ASSETS binding
-      if (env?.ASSETS?.fetch) {
+      // 4. Static assets via ASSETS binding (never serve removed /tra-cuu route)
+      if (cleanPath !== '/tra-cuu' && env?.ASSETS?.fetch) {
         const assetRes = await env.ASSETS.fetch(request);
         if (assetRes.status !== 404) {
           return withSecurity(assetRes, request);

@@ -153,6 +153,7 @@ try {
     });
     assert.equal(r.status, 403);
     assert.equal(r.data.detail?.code, 'ADMIN_NOT_PROVISIONED');
+    assert.equal(r.data.message, 'Vui lòng sử dụng địa chỉ email đã được cấp quyền để xác thực và đăng nhập.');
   });
 
   // Scenario 3: Bootstrap system_admin and test Admin OTP login flow (wrong OTP, valid OTP, replay OTP)
@@ -182,12 +183,21 @@ try {
     assert.ok(otpMatch, 'OTP must be 6 digits');
     const otpCode = otpMatch[1];
 
-    // Immediate resend within 60s cooldown is blocked with 429
-    const cooldownOtp = await call('/api/admin/auth/request-otp', {
+    // Immediate resend succeeds without any cooldown timer and invalidates previous OTP
+    const resendOtp = await call('/api/admin/auth/request-otp', {
       method: 'POST',
       body: { email: 'admin@skyfirst.io.vn' }
     });
-    assert.equal(cooldownOtp.status, 429);
+    assert.equal(resendOtp.status, 200);
+    assert.equal(sentEmails.length, 2);
+    const newOtpCode = sentEmails[1].text.match(/\b(\d{6})\b/)[1];
+
+    // Previous OTP is now invalidated (401)
+    const oldOtpVerify = await call('/api/admin/auth/verify-otp', {
+      method: 'POST',
+      body: { email: 'admin@skyfirst.io.vn', otp: otpCode }
+    });
+    assert.equal(oldOtpVerify.status, 401);
 
     // Wrong OTP attempt is rejected with 401
     const wrongVerify = await call('/api/admin/auth/verify-otp', {
@@ -196,10 +206,10 @@ try {
     });
     assert.equal(wrongVerify.status, 401);
 
-    // Valid OTP succeeds and returns token + CSRF + HttpOnly cookie
+    // Valid new OTP succeeds and returns token + CSRF + HttpOnly cookie
     const goodVerify = await call('/api/admin/auth/verify-otp', {
       method: 'POST',
-      body: { email: 'admin@skyfirst.io.vn', otp: otpCode }
+      body: { email: 'admin@skyfirst.io.vn', otp: newOtpCode }
     });
     assert.equal(goodVerify.status, 200);
     assert.ok(goodVerify.data.admin_token);
@@ -211,7 +221,7 @@ try {
     // Replaying the same OTP is rejected
     const replayVerify = await call('/api/admin/auth/verify-otp', {
       method: 'POST',
-      body: { email: 'admin@skyfirst.io.vn', otp: otpCode }
+      body: { email: 'admin@skyfirst.io.vn', otp: newOtpCode }
     });
     assert.equal(replayVerify.status, 401);
   });
@@ -1568,22 +1578,51 @@ try {
     assert.equal(psychAnalytics.status, 200);
     assert.ok(Array.isArray(psychAnalytics.data.item_psychometrics));
 
-    // 9g. Supreme System Owner (skyfirst.ec@gmail.com) auto-provisioned login, unconfigured email fallback, and immutable protection against system_admin
+    // 9g. Supreme System Owner (Skyfirst.ec@gmail.com) pre-provisioned real OTP delivery via noreply@skyfirst.io.vn, immediate resend without cooldown, honest email failure reporting, and immutable protection
     db.prepare(`DELETE FROM exam_otp_challenges WHERE email='skyfirst.ec@gmail.com'`).run();
     db.prepare(`DELETE FROM exam_rate_limits`).run();
+
+    // When email service is unconfigured, returns 503 EMAIL_SERVICE_UNCONFIGURED (never fakes success and never says unauthorized)
     emailServiceMode = 'unconfigured';
-    const ownerOtpReq = await call('/api/admin/auth/request-otp', {
+    const ownerUnconf = await call('/api/admin/auth/request-otp', {
       method: 'POST',
-      body: { email: 'skyfirst.ec@gmail.com' }
+      body: { email: 'Skyfirst.ec@gmail.com' }
     });
+    assert.equal(ownerUnconf.status, 503);
+    assert.equal(ownerUnconf.data.code, 'EMAIL_SERVICE_UNCONFIGURED');
     emailServiceMode = 'active';
-    assert.equal(ownerOtpReq.status, 200);
-    assert.equal(ownerOtpReq.data.owner_direct_mode, true);
-    assert.match(String(ownerOtpReq.data.owner_emergency_otp), /^\d{6}$/);
+
+    // When email service is active, immediately sends 6-digit OTP from noreply@skyfirst.io.vn to skyfirst.ec@gmail.com
+    const ownerOtp1 = await call('/api/admin/auth/request-otp', {
+      method: 'POST',
+      body: { email: 'Skyfirst.ec@gmail.com' }
+    });
+    assert.equal(ownerOtp1.status, 200);
+    const firstOwnerMail = sentEmails.at(-1);
+    assert.equal(firstOwnerMail.from, 'noreply@skyfirst.io.vn');
+    assert.equal(firstOwnerMail.to, 'skyfirst.ec@gmail.com');
+    const firstOwnerCode = firstOwnerMail.text.match(/\b(\d{6})\b/)[1];
+
+    // Immediate resend without any cooldown invalidates first OTP and issues second OTP
+    const ownerOtp2 = await call('/api/admin/auth/request-otp', {
+      method: 'POST',
+      body: { email: 'Skyfirst.ec@gmail.com' }
+    });
+    assert.equal(ownerOtp2.status, 200);
+    const secondOwnerMail = sentEmails.at(-1);
+    assert.equal(secondOwnerMail.from, 'noreply@skyfirst.io.vn');
+    assert.equal(secondOwnerMail.to, 'skyfirst.ec@gmail.com');
+    const secondOwnerCode = secondOwnerMail.text.match(/\b(\d{6})\b/)[1];
+
+    const staleOwnerVerify = await call('/api/admin/auth/verify-otp', {
+      method: 'POST',
+      body: { email: 'Skyfirst.ec@gmail.com', otp: firstOwnerCode }
+    });
+    assert.equal(staleOwnerVerify.status, 401);
 
     const ownerVerify = await call('/api/admin/auth/verify-otp', {
       method: 'POST',
-      body: { email: 'skyfirst.ec@gmail.com', otp: String(ownerOtpReq.data.owner_emergency_otp) }
+      body: { email: 'Skyfirst.ec@gmail.com', otp: secondOwnerCode }
     });
     assert.equal(ownerVerify.status, 200);
     assert.ok(ownerVerify.data.user.roles.includes('system_owner'));
@@ -1611,7 +1650,6 @@ try {
   const mandatoryRoutes = [
     ['/', 'home', 'Hệ Thống Khảo Thí Và Đánh Giá Sky First'],
     ['/admin', 'admin', 'Phân hệ Quản trị'],
-    ['/tra-cuu', 'tra-cuu', 'Tra cứu kết quả thi'],
     ['/tra-cuu-ket-qua', 'tra-cuu-ket-qua', 'Tra cứu kết quả thi'],
     ['/phuc-khao', 'phuc-khao', 'Đăng ký phúc khảo kết quả thi'],
     ['/ho-tro', 'ho-tro', 'Hỗ trợ thí sinh'],
@@ -1634,7 +1672,13 @@ try {
       verifiedUrls++;
     }
   }
-  assert.equal(verifiedUrls, 18, 'All 18 mandatory URLs must be verified');
+  assert.equal(verifiedUrls, 16, 'All 16 active URLs across both hostnames must be verified');
+  for (const host of hosts) {
+    const legacyTraCuu = await examWorker.fetch(new Request(`${host}/tra-cuu`, { method: 'GET' }), baseEnv);
+    assert.equal(legacyTraCuu.status, 404, `Removed /tra-cuu must return 404 on ${host}`);
+    const legacyHtml = await legacyTraCuu.text();
+    assert.match(legacyHtml, /data-route="404"/);
+  }
 
   // Verify optional canonical 301 redirect preserves path and query string (never redirects to /)
   const canonRes = await examWorker.fetch(
@@ -1687,7 +1731,7 @@ try {
 
   const bundledMod = await import('../public/_worker.js');
   const hRes = await bundledMod.default.fetch(new Request('https://exam.skyfirst.io.vn/tra-cuu'), baseEnv);
-  assert.equal(hRes.status, 200);
+  assert.equal(hRes.status, 404);
   const trRes = await bundledMod.default.fetch(new Request('https://www.exam.skyfirst.io.vn/tra-cuu-ket-qua'), baseEnv);
   assert.equal(trRes.status, 200);
 

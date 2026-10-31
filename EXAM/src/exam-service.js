@@ -704,16 +704,7 @@ async function requestCandidateVerification(env, code, request) {
   }
   await checkRateLimit(env, `otp:cand:${e.id}:${email}`, 5, 10 * 60 * 1000);
 
-  // Cooldown check (60 seconds between sends)
-  const recent = await env.DB.prepare(
-    `SELECT created_at FROM exam_otp_challenges WHERE email=? AND purpose='candidate_verify' AND scope_id=? ORDER BY created_at DESC LIMIT 1`
-  ).bind(email, e.id).first();
-  if (recent) {
-    const elapsed = Date.now() - databaseTimeMs(recent.created_at);
-    if (Number.isFinite(elapsed) && elapsed < 55_000) {
-      return bad('Vui lòng đợi 60 giây trước khi yêu cầu gửi lại mã xác minh.', 429, { code: 'OTP_COOLDOWN' });
-    }
-  }
+  // No fixed cooldown timer: previous unused OTP is invalidated below before issuing a new OTP
 
   // Anti-enumeration check: if exam is restricted to enrolled candidates only (public_access === 0),
   // check enrollment silently or return uniform response if not enrolled.
