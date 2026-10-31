@@ -1622,4 +1622,51 @@ try {
   console.log('PASS Scenario 16: All 18 mandatory URLs across exam.skyfirst.io.vn and www.exam.skyfirst.io.vn return route-specific HTML (200 OK), canonical 301 preserves path+query, and unknown routes return 404');
 }
 
+
+// 17. Bundle Cloudflare Pages Advanced Mode Worker (public/_worker.js) and verify self-contained execution
+{
+  const moduleOrder = [
+    'src/email-templates.js',
+    'src/page-router.js',
+    'src/repository.js',
+    'src/adapters.js',
+    'src/auth-service.js',
+    'src/security-service.js',
+    'src/business-service.js',
+    'src/exam-service.js',
+    'src/index.js'
+  ];
+  const chunks = [
+    '// SKY FIRST EXAM 2026 — Self-Contained Cloudflare Pages Advanced Mode Worker (_worker.js)',
+    '// Auto-generated during npm run build from src/*.js'
+  ];
+  for (const modPath of moduleOrder) {
+    let code = fs.readFileSync(modPath, 'utf8');
+    // Strip relative import statements
+    code = code.replace(/^\s*import\s+[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '');
+    if (modPath !== 'src/index.js') {
+      // Strip export { ... } blocks and convert export declarations to plain declarations
+      code = code.replace(/^\s*export\s*\{[\s\S]*?\};?\s*$/gm, '');
+      code = code.replace(/^(\s*)export\s+(async\s+function|function|const|let|var|class)\b/gm, '$1$2');
+    }
+    chunks.push(`// --- MODULE: ${modPath} ---\n` + code.trim());
+  }
+  const bundledWorkerCode = chunks.join('\n\n') + '\n';
+  fs.writeFileSync('public/_worker.js', bundledWorkerCode, 'utf8');
+
+  const bundledMod = await import('../public/_worker.js');
+  const hRes = await bundledMod.default.fetch(new Request('https://exam.skyfirst.io.vn/tra-cuu'), baseEnv);
+  assert.equal(hRes.status, 200);
+  const trRes = await bundledMod.default.fetch(new Request('https://www.exam.skyfirst.io.vn/tra-cuu-ket-qua'), baseEnv);
+  assert.equal(trRes.status, 200);
+
+  const inCloudflareCi = Boolean(process.env.CF_PAGES || process.env.CI || process.cwd().startsWith('/opt/buildhome') || process.env.KEEP_PAGES_WORKER === '1');
+  if (!inCloudflareCi) {
+    fs.unlinkSync('public/_worker.js');
+  } else {
+    console.log('Cloudflare CI detected: kept public/_worker.js in ./public for Pages Advanced Mode deployment');
+  }
+  console.log('PASS Scenario 17: Cloudflare Pages Advanced Mode _worker.js bundle compiled and verified');
+}
+
 process.exit(0);

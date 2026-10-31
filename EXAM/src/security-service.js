@@ -11,12 +11,7 @@
 //  - Post-Exam Anomaly & Answer Similarity Analysis for Officer Review
 // =============================================================================
 
-const str = v => String(v ?? '').trim();
-const safeJson = (v, f) => { try { return typeof v === 'string' ? JSON.parse(v) : (v ?? f); } catch { return f; } };
-
-function httpError(message, status = 400, detail) {
-  return Object.assign(new Error(message), { status, detail });
-}
+import { httpError, safeJson, str } from './auth-service.js';
 
 export const PRIVACY_COMPLIANCE_POLICY = Object.freeze({
   unit: 'Mạng Lưới Giáo Dục Và Phát Triển Cộng Đồng Sky First',
@@ -376,7 +371,7 @@ export function buildAttemptQuestionSnapshot(rawQuestions, exam = {}, attemptSee
   return list;
 }
 
-const MAX_ANSWER_BYTES = 2_000_000;
+export const MAX_ANSWER_BYTES = 2_000_000;
 
 export function sanitizeAnswers(raw, questions = []) {
   if (raw == null) return {};
@@ -425,7 +420,7 @@ export function sanitizeAnswers(raw, questions = []) {
   return out;
 }
 
-const MANUAL_TYPES = new Set(['essay', 'long', 'structured', 'file', 'image', 'audio', 'math']);
+export const MANUAL_TYPES = new Set(['essay', 'long', 'structured', 'file', 'image', 'audio', 'math']);
 
 function normalizeValue(v) {
   return str(v).replace(/\s+/g, ' ').toLocaleLowerCase('vi-VN');

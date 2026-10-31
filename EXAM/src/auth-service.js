@@ -11,7 +11,7 @@
 // =============================================================================
 
 import { ensureAdditiveSchema } from './repository.js';
-import { dispatchEventEmail, sha256Hex, timingSafeEqualStr } from './adapters.js';
+import { dispatchEventEmail, httpError, sha256Hex, str, timingSafeEqualStr } from './adapters.js';
 import { ALLOWED_HOSTNAMES } from './page-router.js';
 
 export const SECURITY_HEADERS = {
@@ -59,7 +59,7 @@ export const ROLE_PERMISSIONS = {
   report_viewer: new Set(['dashboard:view', 'exams:read', 'questions:read', 'results:read', 'candidates:read', 'monitor:read', 'appeals:read', 'support:read', 'audit:read'])
 };
 
-export const str = v => String(v ?? '').trim();
+export { str, httpError };
 export const safeJson = (v, f) => { try { return typeof v === 'string' ? JSON.parse(v) : (v ?? f); } catch { return f; } };
 export const nowIso = () => new Date().toISOString();
 
@@ -91,9 +91,6 @@ export const bad = (message, status = 400, detail) => {
   }, status);
 };
 
-export function httpError(message, status = 400, detail) {
-  return Object.assign(new Error(message), { status, detail });
-}
 
 export const timingSafeStringEqual = timingSafeEqualStr;
 export const sha256Text = sha256Hex;

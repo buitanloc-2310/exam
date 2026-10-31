@@ -11,9 +11,9 @@
 import { EMAIL_SENDERS, renderEmailTemplate } from './email-templates.js';
 import { ensureAdditiveSchema } from './repository.js';
 
-const str = v => String(v ?? '').trim();
+export const str = v => String(v ?? '').trim();
 
-function httpError(message, status = 400, detail) {
+export function httpError(message, status = 400, detail) {
   return Object.assign(new Error(message), { status, detail });
 }
 

@@ -70,11 +70,10 @@ import {
   analyzeCognitiveAndBehavioralSignals,
   generateDynamicIntegrityChallenge,
   runAdversarialExamSimulation,
-  DEFAULT_THREAT_MEMORY
+  DEFAULT_THREAT_MEMORY,
+  MANUAL_TYPES,
+  MAX_ANSWER_BYTES
 } from './security-service.js';
-
-const MANUAL_TYPES = new Set(['essay', 'long', 'structured', 'file', 'image', 'audio', 'math']);
-const MAX_ANSWER_BYTES = 2_000_000;
 const ATTACHMENT_TYPES = new Set(['file', 'image', 'audio']);
 
 const VALID_EXAM_TRANSITIONS = {

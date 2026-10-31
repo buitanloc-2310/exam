@@ -156,3 +156,4 @@ try{
 
   console.log(`EXAM RUNTIME VALIDATION: ${checks}/${checks} PASS`);
 }finally{db.close()}
+process.exit(0);
